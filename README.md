@@ -19,7 +19,7 @@ A 股行情分析、因子选股与回测工作台。**只做研究与教育，�
 | 上传持仓、代码、成交 | 数据回流只发聚合指标，默认关闭 |
 | 投资建议 | 输出的是统计结果，不是买卖建议 |
 
-完整说明见 [DISCLAIMER.md](DISCLAIMER.md) 与 [PRIVACY.md](PRIVACY.md)。
+完整说明见 [DISCLAIMER.md](DISCLAIMER.md) 与 [PRIVACY.md](PRIVACY.md)，逐项合规取舍见 [docs/compliance.md](docs/compliance.md)。
 
 ## 与本地完整版隔离
 
