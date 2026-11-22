@@ -1,0 +1,7 @@
+{
+  "watchlist": ["600519", "000001", "300750", "601318", "002594", "600036", "688981", "000858"],
+  "refresh_seconds": {"quote": 1.0, "market": 15, "detail": 5, "moneyflow": 20, "news": 300},
+  "data": {"kline_count": 260, "news_count": 20, "market_top_n": 200},
+  "offline": false,
+  "ui": {"theme": "dark", "start_page": "quote", "font_size": 12}
+}

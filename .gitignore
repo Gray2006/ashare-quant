@@ -1,21 +1,16 @@
-# 本地数据、缓存与导出，绝不入库
+# 运行时生成，绝不入库
+/config.json
+/config.local.json
 /data/
+/logs/
 /reports/
-/.tmpdata/
-/memory/
+/_smoke.txt
 *.db
 *.db-wal
 *.db-shm
 *.sqlite
 *.sqlite3
 *.parquet
-
-# 本地配置与凭据
-/.ashare-quant/
-config.local.json
-.env
-*.key
-*.pem
 
 # Python
 __pycache__/
