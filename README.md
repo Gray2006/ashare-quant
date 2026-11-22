@@ -161,6 +161,8 @@ pytest                 # 全部离线测试
 pytest --cov=ashare_quant
 ```
 
+CI 模板见 `docs/github-actions-tests.yml`，复制到 `.github/workflows/tests.yml` 即可启用（需要 token 具备 `workflow` scope）。
+
 提交前请确认：不新增交易/下单接口，不引入需要登录的数据源，不把密钥写进代码。
 
 ## 许可证
