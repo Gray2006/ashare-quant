@@ -86,6 +86,29 @@
     <div class="idx" id="indexCards"></div>
   </section>
 
+  <section>
+    <h2>个股技术分析 <span class="hint">本地日线 · 均线 / MACD / RSI / 布林 / 量能</span></h2>
+    <div class="panel">
+      <div class="row">
+        <div class="field"><label>代码</label><input id="techCode" value="600519" style="width:120px" maxlength="10"></div>
+        <div class="field"><label>回看</label>
+          <select id="techDays">
+            <option value="120">120 日</option>
+            <option value="250" selected>250 日</option>
+            <option value="500">500 日</option>
+          </select>
+        </div>
+        <button id="techBtn">分析</button>
+        <span class="muted" id="techMeta"></span>
+      </div>
+      <div class="err" id="techErr"></div>
+      <div class="metrics" id="techCards"></div>
+      <div class="chips" id="techSignals"></div>
+      <canvas id="techPrice" style="height:380px;margin-top:12px"></canvas>
+      <canvas id="techInd" style="height:180px"></canvas>
+    </div>
+  </section>
+
   <section class="grid2">
     <div>
       <h2>涨幅前列</h2>
@@ -117,6 +140,7 @@
 
   <section>
     <h2>因子回测 <span class="hint">T+1 开盘成交 · 整手 · 佣金/印花税/滑点 · 涨停不买跌停不卖</span></h2>
+    <p class="muted" style="margin:-6px 0 10px;font-size:12px">默认动量因子只是示例：A 股短周期动量常表现为反转，换成 <code>reversal_5</code> 或 <code>volatility_20</code> 对比更直观。回测结果不构成任何建议。</p>
     <div class="panel">
       <div class="row">
         <div class="field"><label>因子</label><select id="btFactor"></select></div>
@@ -358,11 +382,214 @@ async function runBacktest() {
   }
 }
 
+function drawTechPrice(series) {
+  const canvas = $("techPrice");
+  const dpr = window.devicePixelRatio || 1;
+  const width = canvas.clientWidth, height = 380;
+  canvas.width = width * dpr; canvas.height = height * dpr;
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  if (!series || series.length < 2) return;
+
+  const pad = { l: 60, r: 14, t: 12 };
+  const priceH = 244;
+  const volTop = priceH + 34;
+  const volH = height - volTop - 20;
+  const w = width - pad.l - pad.r;
+  const n = series.length;
+  const x = (i) => pad.l + w * i / (n - 1);
+  const values = [];
+  series.forEach((s) => {
+    [s.low, s.high, s.ma5, s.ma20, s.ma60].forEach((v) => { if (v !== null && v !== undefined) values.push(v); });
+  });
+  let min = Math.min(...values), max = Math.max(...values);
+  const margin = (max - min) * 0.05 || max * 0.01 || 1;
+  min -= margin; max += margin;
+  const y = (v) => pad.t + priceH * (1 - (v - min) / (max - min));
+
+  ctx.strokeStyle = "#21262d"; ctx.fillStyle = "#8b949e"; ctx.font = "11px Segoe UI"; ctx.textAlign = "left";
+  for (let i = 0; i <= 4; i++) {
+    const v = min + (max - min) * i / 4, yy = y(v);
+    ctx.beginPath(); ctx.moveTo(pad.l, yy); ctx.lineTo(pad.l + w, yy); ctx.stroke();
+    ctx.fillText(v.toFixed(2), 4, yy + 4);
+  }
+
+  const step = w / n;
+  const bw = Math.max(1, Math.min(7, step * 0.62));
+  series.forEach((s, i) => {
+    if (s.close === null || s.open === null) return;
+    const up = s.close >= s.open;
+    ctx.strokeStyle = up ? "#f85149" : "#3fb950";
+    ctx.fillStyle = ctx.strokeStyle;
+    const xx = x(i);
+    ctx.beginPath(); ctx.moveTo(xx, y(s.high)); ctx.lineTo(xx, y(s.low)); ctx.stroke();
+    const top = y(Math.max(s.open, s.close)), bottom = y(Math.min(s.open, s.close));
+    ctx.fillRect(xx - bw / 2, top, bw, Math.max(1, bottom - top));
+  });
+
+  const line = (key, color) => {
+    ctx.beginPath(); ctx.strokeStyle = color; ctx.lineWidth = 1.2;
+    let started = false;
+    series.forEach((s, i) => {
+      const v = s[key];
+      if (v === null || v === undefined) return;
+      const xx = x(i), yy = y(v);
+      started ? ctx.lineTo(xx, yy) : (ctx.moveTo(xx, yy), started = true);
+    });
+    ctx.stroke();
+  };
+  line("ma5", "#58a6ff");
+  line("ma20", "#f0a35e");
+  line("ma60", "#bc8cff");
+
+  const maxVol = Math.max(...series.map((s) => s.volume || 0)) || 1;
+  series.forEach((s, i) => {
+    if (!s.volume) return;
+    const barH = volH * s.volume / maxVol;
+    const up = s.close >= s.open;
+    ctx.fillStyle = up ? "rgba(248,81,73,.55)" : "rgba(63,185,80,.55)";
+    ctx.fillRect(x(i) - bw / 2, volTop + volH - barH, bw, barH);
+  });
+  ctx.strokeStyle = "#21262d";
+  ctx.beginPath(); ctx.moveTo(pad.l, volTop + volH); ctx.lineTo(pad.l + w, volTop + volH); ctx.stroke();
+
+  ctx.fillStyle = "#8b949e"; ctx.textAlign = "center";
+  [0, Math.floor(n / 4), Math.floor(n / 2), Math.floor(n * 3 / 4), n - 1].forEach((i) => {
+    ctx.textAlign = i === 0 ? "left" : i === n - 1 ? "right" : "center";
+    ctx.fillText(series[i].date.slice(2), x(i), height - 4);
+  });
+  ctx.textAlign = "left";
+  ctx.fillStyle = "#58a6ff"; ctx.fillText("MA5", pad.l, pad.t + 10);
+  ctx.fillStyle = "#f0a35e"; ctx.fillText("MA20", pad.l + 34, pad.t + 10);
+  ctx.fillStyle = "#bc8cff"; ctx.fillText("MA60", pad.l + 74, pad.t + 10);
+}
+
+function drawTechInd(series) {
+  const canvas = $("techInd");
+  const dpr = window.devicePixelRatio || 1;
+  const width = canvas.clientWidth, height = 180;
+  canvas.width = width * dpr; canvas.height = height * dpr;
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  if (!series || series.length < 2) return;
+
+  const pad = { l: 60, r: 14 };
+  const w = width - pad.l - pad.r;
+  const n = series.length;
+  const x = (i) => pad.l + w * i / (n - 1);
+  const macdH = 92;
+
+  const macdValues = [];
+  series.forEach((s) => [s.dif, s.dea, s.hist].forEach((v) => { if (v !== null && v !== undefined) macdValues.push(v); }));
+  let min = Math.min(...macdValues, 0), max = Math.max(...macdValues, 0);
+  const margin = (max - min) * 0.08 || 0.01;
+  min -= margin; max += margin;
+  const y = (v) => 10 + macdH * (1 - (v - min) / (max - min));
+  const zero = y(0);
+
+  ctx.strokeStyle = "#21262d"; ctx.beginPath(); ctx.moveTo(pad.l, zero); ctx.lineTo(pad.l + w, zero); ctx.stroke();
+  const step = w / n;
+  const bw = Math.max(1, Math.min(5, step * 0.5));
+  series.forEach((s, i) => {
+    if (s.hist === null || s.hist === undefined) return;
+    ctx.fillStyle = s.hist >= 0 ? "rgba(248,81,73,.7)" : "rgba(63,185,80,.7)";
+    const top = Math.min(zero, y(s.hist)), h = Math.abs(zero - y(s.hist));
+    ctx.fillRect(x(i) - bw / 2, top, bw, Math.max(1, h));
+  });
+  const line = (key, color) => {
+    ctx.beginPath(); ctx.strokeStyle = color; ctx.lineWidth = 1.2;
+    let started = false;
+    series.forEach((s, i) => {
+      const v = s[key];
+      if (v === null || v === undefined) return;
+      started ? ctx.lineTo(x(i), y(v)) : (ctx.moveTo(x(i), y(v)), started = true);
+    });
+    ctx.stroke();
+  };
+  line("dif", "#58a6ff");
+  line("dea", "#f0a35e");
+
+  const rsiTop = 118, rsiH = 46;
+  const ry = (v) => rsiTop + rsiH * (1 - v / 100);
+  ctx.strokeStyle = "#21262d";
+  [30, 70].forEach((v) => {
+    ctx.beginPath(); ctx.moveTo(pad.l, ry(v)); ctx.lineTo(pad.l + w, ry(v)); ctx.stroke();
+  });
+  ctx.fillStyle = "#8b949e"; ctx.font = "11px Segoe UI"; ctx.textAlign = "left";
+  ctx.fillText("RSI 30/70", 4, rsiTop + 4);
+  ctx.strokeStyle = "#bc8cff"; ctx.lineWidth = 1.2; ctx.beginPath();
+  let started = false;
+  series.forEach((s, i) => {
+    if (s.rsi === null || s.rsi === undefined) return;
+    started ? ctx.lineTo(x(i), ry(s.rsi)) : (ctx.moveTo(x(i), ry(s.rsi)), started = true);
+  });
+  ctx.stroke();
+  ctx.fillStyle = "#8b949e";
+  ctx.fillText("MACD", 4, 16);
+}
+
+async function runTech() {
+  $("techErr").textContent = "";
+  $("techMeta").textContent = "分析中…";
+  try {
+    const code = $("techCode").value.trim();
+    if (!code) throw new Error("先填股票代码");
+    const days = $("techDays").value;
+    const data = await getJSON(`/api/stock?code=${encodeURIComponent(code)}&days=${days}`);
+    if (data.error) throw new Error(data.error);
+    state.tech = data;
+    const s = data.summary;
+    $("techMeta").textContent = `${s.code} ${s.name} · ${s.date} · ${s.bars} 根日线`;
+    const trendClass = s.trend === "多头" ? "up" : s.trend === "空头" ? "down" : "flat";
+    const cards = [
+      ["收盘", fmtNum(s.close), cls(s.pct_chg)],
+      ["涨跌幅", fmtPctPoint(s.pct_chg), cls(s.pct_chg)],
+      ["趋势", s.trend, trendClass],
+      ["RSI14", fmtNum(s.rsi14, 1), s.rsi14 >= 70 ? "up" : s.rsi14 <= 30 ? "down" : ""],
+      ["MACD柱", fmtNum(s.macd_hist, 3), cls(s.macd_hist)],
+      ["ATR", fmtPct(s.atr_pct), ""],
+      ["20日", fmtPct(s.ret20), cls(s.ret20)],
+      ["60日", fmtPct(s.ret60), cls(s.ret60)],
+      ["距250日高", fmtPct(s.drawdown_from_high), "down"],
+      ["量比", fmtNum(s.vol_ratio), ""],
+    ];
+    $("techCards").innerHTML = cards.map(([label, value, klass]) =>
+      `<div class="card"><div class="label">${esc(label)}</div><div class="value ${klass}">${esc(value)}</div></div>`).join("");
+    $("techSignals").innerHTML = (s.signals || []).map((sig) => `<span class="chip">${esc(sig)}</span>`).join("");
+    drawTechPrice(data.series);
+    drawTechInd(data.series);
+  } catch (err) {
+    $("techErr").textContent = err.message;
+    $("techMeta").textContent = "";
+  }
+}
+
+$("techBtn").addEventListener("click", runTech);
+$("techCode").addEventListener("keydown", (e) => { if (e.key === "Enter") runTech(); });
+["gainers", "losers", "screenTable"].forEach((id) => {
+  $(id).addEventListener("click", (e) => {
+    const tr = e.target.closest("tr");
+    if (!tr) return;
+    const cell = tr.querySelector("td");
+    if (cell && /^\d{6}$/.test(cell.textContent.trim())) {
+      $("techCode").value = cell.textContent.trim();
+      runTech();
+      $("techCode").scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  });
+});
+window.addEventListener("resize", () => {
+  if (state.tech) { drawTechPrice(state.tech.series); drawTechInd(state.tech.series); }
+});
+
 $("screenBtn").addEventListener("click", runScreen);
 $("btBtn").addEventListener("click", runBacktest);
 $("btEnd").value = new Date().toISOString().slice(0, 10);
 loadOverview();
 loadFactors();
+runTech();
 </script>
 </body>
 </html>

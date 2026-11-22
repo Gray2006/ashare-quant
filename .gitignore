@@ -1,8 +1,8 @@
 # 本地数据、缓存与导出，绝不入库
-data/
-reports/
-.tmpdata/
-memory/
+/data/
+/reports/
+/.tmpdata/
+/memory/
 *.db
 *.db-wal
 *.db-shm
@@ -11,7 +11,7 @@ memory/
 *.parquet
 
 # 本地配置与凭据
-.ashare-quant/
+/.ashare-quant/
 config.local.json
 .env
 *.key

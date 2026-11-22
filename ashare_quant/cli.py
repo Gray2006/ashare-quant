@@ -11,9 +11,9 @@ from pathlib import Path
 import pandas as pd
 
 from . import __version__, config
-from .data import eastmoney, sync
+from .data import eastmoney, sync, tencent
 from .data.store import Store
-from .engine import backtest, factors, report, screener
+from .engine import analysis, backtest, factors, report, screener
 from .feedback import client as feedback_client
 from .feedback import consent as feedback_consent
 
@@ -104,14 +104,20 @@ def cmd_sync(args) -> int:
             print(f"\r同步 {index}/{total}  {code}", end="", flush=True)
 
     print(f"同步区间: {start} ~ 今天")
-    result = sync.sync_all(
-        store,
-        start=start,
-        full=args.full,
-        limit=args.limit,
-        with_universe=not args.no_universe,
-        progress=progress,
-    )
+    if args.codes:
+        codes = [code.strip() for code in args.codes.split(",") if code.strip()]
+        bars = sync.sync_bars(store, codes=codes, start=start, full=args.full,
+                              progress=progress)
+        result = {"bars": bars, "benchmarks": sync.sync_benchmarks(store, start=start)}
+    else:
+        result = sync.sync_all(
+            store,
+            start=start,
+            full=args.full,
+            limit=args.limit,
+            with_universe=not args.no_universe,
+            progress=progress,
+        )
     print()
     if "universe" in result:
         print(f"股票列表: {result['universe']} 只")
@@ -161,13 +167,15 @@ def _screen_frame(store: Store, live: bool) -> pd.DataFrame:
     if live:
         try:
             snapshot = eastmoney.list_stocks()
-            keep = ["code", "name", "pe_ttm", "pb", "market_cap", "float_cap",
-                    "volume_ratio", "amplitude", "industry", "region"]
-            snapshot = snapshot[[c for c in keep if c in snapshot.columns]]
-            frame = frame.drop(columns=[c for c in ("name", "industry") if c in frame.columns])
-            frame = frame.merge(snapshot, on="code", how="left")
         except Exception as exc:  # noqa: BLE001
-            print(f"在线快照获取失败，改用本地字段: {exc}")
+            from .data import sina
+            print(f"东方财富快照不可用，改用新浪列表: {exc}")
+            snapshot = sina.list_stocks()
+        keep = ["code", "name", "pe_ttm", "pb", "market_cap", "float_cap",
+                "volume_ratio", "amplitude", "industry", "region"]
+        snapshot = snapshot[[c for c in keep if c in snapshot.columns]]
+        frame = frame.drop(columns=[c for c in ("name", "industry") if c in frame.columns])
+        frame = frame.merge(snapshot, on="code", how="left")
     return frame
 
 
@@ -200,6 +208,21 @@ def cmd_screen(args) -> int:
                 columns.append((name, name, "num"))
     _print_table(selected, columns)
     print(f"\n命中 {len(selected)} 只。筛选条件: {args.expr}")
+    return 0
+
+
+def cmd_analyze(args) -> int:
+    store = _store()
+    if not _check_data(store):
+        return 1
+    result = analysis.analyze(store, args.code, days=args.days)
+    if "error" in result:
+        print(result["error"])
+        return 1
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
+    print(analysis.format_summary(result))
     return 0
 
 
@@ -373,10 +396,17 @@ def cmd_doctor(args) -> int:
     if args.network:
         try:
             frame = eastmoney.index_quotes(["000300"])
+            if not frame.empty:
+                print(f"网络: 正常（东方财富，沪深300 {frame.iloc[0]['price']}）")
+                return 0
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            frame = tencent.quotes(["600519"])
             if frame.empty:
                 print("网络: 接口返回为空")
                 return 1
-            print(f"网络: 正常（沪深300 {frame.iloc[0]['price']}）")
+            print(f"网络: 正常（腾讯备用源，贵州茅台 {frame.iloc[0]['price']}）")
         except Exception as exc:  # noqa: BLE001
             print(f"网络: 不通（{exc}）")
             return 1
@@ -408,6 +438,7 @@ def build_parser() -> argparse.ArgumentParser:
               aq init
               aq sync --limit 300
               aq quote 600519 000001
+              aq analyze 600519
               aq screen "pct_chg > 2 and between(turnover, 1, 10)" --limit 20
               aq backtest --factor momentum_20 --top 20 --rebalance M
               aq serve
@@ -427,6 +458,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--start", default=None, help="起始日期，默认读配置")
     p.add_argument("--days", type=int, default=None, help="只同步最近 N 个自然日")
     p.add_argument("--limit", type=int, default=None, help="只同步前 N 只股票，便于试用")
+    p.add_argument("--codes", default=None, help="只同步指定代码，逗号分隔，如 600519,000001")
     p.add_argument("--full", action="store_true", help="忽略本地进度，全量重拉")
     p.add_argument("--no-universe", action="store_true", help="不更新股票列表")
     p.set_defaults(func=cmd_sync)
@@ -446,6 +478,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("factors", help="列出内置因子")
     p.add_argument("--json", action="store_true", help="输出 JSON")
     p.set_defaults(func=cmd_factors)
+
+    p = sub.add_parser("analyze", help="单只股票技术分析（均线/MACD/RSI/布林/波动）")
+    p.add_argument("code", help="股票代码，如 600519")
+    p.add_argument("--days", type=int, default=250, help="回看交易日，默认 250")
+    p.add_argument("--json", action="store_true", help="输出 JSON")
+    p.set_defaults(func=cmd_analyze)
 
     p = sub.add_parser("backtest", help="因子回测（T+1、费用、涨跌停、整手）")
     _add_backtest_args(p)

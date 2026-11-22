@@ -18,7 +18,7 @@ import pandas as pd
 from .. import __version__, config
 from ..data import eastmoney
 from ..data.store import Store
-from ..engine import backtest, factors, screener
+from ..engine import analysis, backtest, factors, screener
 from ..feedback import consent as feedback_consent
 
 WEB_DIR = Path(__file__).resolve().parent
@@ -63,7 +63,8 @@ def overview() -> dict:
         ]
     indices = []
     for code, name in (("000001", "上证指数"), ("000300", "沪深300"),
-                       ("000905", "中证500"), ("399006", "创业板指")):
+                       ("000905", "中证500"), ("000852", "中证1000"),
+                       ("399006", "创业板指")):
         frame = store.index_panel(code)
         if frame.empty:
             continue
@@ -100,7 +101,11 @@ def _screen_frame(store: Store, live: bool) -> pd.DataFrame:
         frame = frame.merge(stocks[["code", "name", "industry"]], on="code", how="left")
     frame = screener.attach_factors(frame, panel)
     if live:
-        snapshot = eastmoney.list_stocks()
+        try:
+            snapshot = eastmoney.list_stocks()
+        except Exception:  # noqa: BLE001
+            from ..data import sina
+            snapshot = sina.list_stocks()
         keep = ["code", "pe_ttm", "pb", "market_cap", "float_cap",
                 "volume_ratio", "amplitude", "industry"]
         snapshot = snapshot[[c for c in keep if c in snapshot.columns]]
@@ -215,6 +220,18 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path == "/api/factors":
                 self._json(factors.list_factors())
+                return
+            if path == "/api/stock":
+                query = parse_qs(parsed.query)
+                code = (query.get("code") or [""])[0].strip()
+                if not code:
+                    self._json({"error": "缺少 code"}, 400)
+                    return
+                try:
+                    days = int((query.get("days") or ["250"])[0])
+                except ValueError:
+                    days = 250
+                self._json(analysis.analyze(_store(), code, days=days))
                 return
             if path == "/api/quote":
                 query = parse_qs(parsed.query)
