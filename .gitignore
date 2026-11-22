@@ -4,6 +4,7 @@
 /data/
 /logs/
 /reports/
+/memory/
 /_smoke.txt
 *.db
 *.db-wal
