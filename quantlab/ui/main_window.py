@@ -177,6 +177,11 @@ class MainWindow(QMainWindow):
         self._build()
         self._apply_geometry()
         self._start_hub()
+        try:
+            from .. import feedback
+            feedback.start()
+        except Exception:
+            pass
 
         self._clock = QTimer(self)
         self._clock.timeout.connect(self._tick)
@@ -821,6 +826,11 @@ class MainWindow(QMainWindow):
         # 不在这里逐个停页面的 hub / 掐线程:后台线程正在跑原生代码时被拆,
         # 会以 0xC0000409 fail-fast 崩(现象:关窗偶尔崩、偶尔干净)。
         # TerminateProcess 不跑 DLL 卸载通知,进程直接没,线程跟着一起走。
+        try:
+            from .. import feedback
+            feedback.stop()
+        except Exception:
+            pass
         try:
             self._clock.stop()
         except Exception:

@@ -59,6 +59,9 @@ DEFAULTS: dict = {
                         "moneyflow": 20, "news": 300},
     "data": {"kline_count": 260, "news_count": 20, "market_top_n": 200},
     "offline": False,
+    # 数据回流(默认关闭):地址/key 都由用户自己填;key 落盘自动加密
+    "cloud": {"enabled": False, "base_url": "", "key": "", "timeout": 15},
+    "feedback": {"enabled": False, "interval": 1800, "consent": False},
     "ui": {"theme": "dark", "start_page": "quote", "font_size": 12},
 }
 
@@ -77,7 +80,7 @@ class Config:
     # 落盘要加密的字段(点号路径)。公开版默认没有凭据;将来加接口密钥时
     # 把路径写进来即可,读写自动透明加解密。
     SECRET_PATHS = ("agent.token", "okx.api_key", "okx.api_secret",
-                    "okx.passphrase")
+                    "okx.passphrase", "cloud.key")
 
     def __init__(self, path: Path | None = None):
         self.path = Path(path) if path else CONFIG_PATH

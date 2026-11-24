@@ -286,6 +286,26 @@ class BacktestPage(QWidget):
             self._strategy = payload["strategy"]
             self._data = payload.get("data") or {}
             self._show(payload)
+            try:
+                from .. import feedback
+                m = payload.get("metrics") or {}
+                keep = ("total_return_pct", "annual_return_pct",
+                        "max_drawdown_pct", "sharpe_mtm", "sharpe_realized",
+                        "sortino", "calmar", "win_rate_pct", "profit_factor",
+                        "exposure_pct", "days", "trades", "beta",
+                        "alpha_annual", "information_ratio")
+                metrics = {k: m.get(k) for k in keep
+                           if isinstance(m.get(k), (int, float))}
+                strat = payload.get("strategy")
+                params = {k: v for k, v in (getattr(strat, "params", {}) or {}).items()
+                          if isinstance(v, (int, float)) and not isinstance(v, bool)}
+                feedback.push(
+                    "backtest", "a",
+                    {"metrics": metrics, "params": params,
+                     "universe_n": len(payload.get("codes") or [])},
+                    strategy=str(getattr(strat, "name", "") or "backtest"))
+            except Exception:
+                pass
             self.btn_run.setEnabled(True)
             self.btn_export.setEnabled(True)
             self.progress.setValue(100)
