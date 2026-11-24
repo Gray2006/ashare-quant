@@ -26,6 +26,14 @@ from ..engine.hub import TaskRunner
 from .common import Card, StatCard, label, pnl_color, set_cell, table
 from .theme import ACCENT, DOWN, TEXT, TEXT_DIM, TEXT_MUT, UP, WARN
 
+def _fmt(v, spec: str, default: str = "—") -> str:
+    """None/NaN 不炸格式化。"""
+    try:
+        return format(float(v), spec)
+    except (TypeError, ValueError):
+        return default
+
+
 HELP = """<h3>这是什么</h3>
 <p>程序自动生成一批「因子公式」(比如 <code>roc(close,20)</code> = 20 日涨幅),
 用历史数据检验它们和未来涨跌有没有稳定关系。挖出来的公式可以直接拿去选股或回测。</p>
@@ -130,8 +138,8 @@ class _LibraryDialog(QDialog):
             set_cell(self.tbl, i, 0, r.get("expr") or "", align="left")
             set_cell(self.tbl, i, 1, r.get("label") or "", align="left")
             st = r.get("stats") or {}
-            set_cell(self.tbl, i, 2, f'{st.get("test_ic", st.get("ic", 0)):+.3f}')
-            set_cell(self.tbl, i, 3, f'{st.get("stability", "-")}')
+            set_cell(self.tbl, i, 2, _fmt(st.get("test_ic", st.get("ic")), "+.3f"))
+            set_cell(self.tbl, i, 3, _fmt(st.get("stability"), ".2f"))
             set_cell(self.tbl, i, 4, r.get("created") or "", align="left")
         self.hint.setText(f"共 {len(self._rows)} 条")
 
@@ -204,6 +212,7 @@ class _MarketPanel(QWidget):
         for n in (200, 300, 600):
             self.u.addItem(f"{n} 只", n)
         self.u.setCurrentIndex(1)
+        self.u.setEnabled(self.market == "a")
         adv.addWidget(self.u)
         adv.addWidget(label("历史", dim=True))
         self.days = QComboBox()
@@ -305,16 +314,16 @@ class _MarketPanel(QWidget):
             self.tbl.insertRow(i)
             mark = "★ " if r.get("selected") else ""
             set_cell(self.tbl, i, 0, mark + (r.get("expr") or ""), align="left")
-            set_cell(self.tbl, i, 1, f'{r.get("train_ic", r.get("ic", 0)):+.3f}',
-                     pnl_color(r.get("train_ic", r.get("ic"))))
-            set_cell(self.tbl, i, 2, f'{r.get("test_ic", 0):+.3f}',
+            tr_ic = r.get("train_ic", r.get("ic"))
+            set_cell(self.tbl, i, 1, _fmt(tr_ic, "+.3f"), pnl_color(tr_ic))
+            set_cell(self.tbl, i, 2, _fmt(r.get("test_ic"), "+.3f"),
                      pnl_color(r.get("test_ic")))
-            set_cell(self.tbl, i, 3, f'{r.get("stability", 0):.2f}')
-            set_cell(self.tbl, i, 4, f'{r.get("coverage", 0) * 100:.0f}%')
-            set_cell(self.tbl, i, 5, f'{r.get("spread", 0) * 100:+.2f}%',
+            set_cell(self.tbl, i, 3, _fmt(r.get("stability"), ".2f"))
+            set_cell(self.tbl, i, 4, _fmt((r.get("coverage") or 0) * 100, ".0f") + "%")
+            set_cell(self.tbl, i, 5, _fmt((r.get("spread") or 0) * 100, "+.2f") + "%",
                      pnl_color(r.get("spread")))
             risk = str(r.get("risk") or ("低" if r.get("oos_ok") else "高"))
-            color = UP if risk == "低" else WARN if risk == "中" else DOWN
+            color = DOWN if risk == "低" else WARN if risk == "中" else UP
             set_cell(self.tbl, i, 6, risk, color)
             item = self.tbl.item(i, 0)
             if item is not None:
@@ -449,16 +458,16 @@ class _MarketPanel(QWidget):
             return
         m = d.get("metrics") or {}
         self.curve.show_curve(d.get("curve") or [])
-        self.s_ret.set(f'{m.get("total_return_pct", 0):+.1f}%',
+        self.s_ret.set(_fmt(m.get("total_return_pct"), "+.1f") + "%",
                        pnl_color(m.get("total_return_pct")))
-        self.s_ann.set(f'{m.get("annual_return_pct", 0):+.1f}%',
+        self.s_ann.set(_fmt(m.get("annual_return_pct"), "+.1f") + "%",
                        pnl_color(m.get("annual_return_pct")))
-        self.s_sharpe.set(f'{m.get("sharpe", 0):+.2f}',
+        self.s_sharpe.set(_fmt(m.get("sharpe"), "+.2f"),
                           pnl_color(m.get("sharpe")))
-        self.s_mdd.set(f'{m.get("max_drawdown_pct", 0):.1f}%', DOWN)
-        self.s_oos.set(f'{m.get("oos_return_pct", 0):+.1f}%',
+        self.s_mdd.set(_fmt(m.get("max_drawdown_pct"), ".1f") + "%", DOWN)
+        self.s_oos.set(_fmt(m.get("oos_return_pct"), "+.1f") + "%",
                        pnl_color(m.get("oos_return_pct")))
-        self.s_oos_sharpe.set(f'{m.get("oos_sharpe", 0):+.2f}',
+        self.s_oos_sharpe.set(_fmt(m.get("oos_sharpe"), "+.2f"),
                               pnl_color(m.get("oos_sharpe")))
         self.bt_hint.setText(
             f'{m.get("n_days")} 天 · 换手 {m.get("turnover_avg")} · '
@@ -473,7 +482,7 @@ class _MarketPanel(QWidget):
             if not expr:
                 continue
             term = f"rank({expr})"
-            sign = float(r.get("test_ic", r.get("ic")) or 1) >= 0
+            sign = float(r.get("test_ic", r.get("ic")) or 0) >= 0
             parts.append(("+" if sign else "-") + term)
         if not parts:
             return ""

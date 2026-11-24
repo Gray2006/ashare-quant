@@ -16,7 +16,6 @@ import time
 import numpy as np
 import pandas as pd
 
-from . import dsl
 from . import factor_mine as fm
 
 VARS = ("close", "open", "high", "low", "volume", "amount")
@@ -277,10 +276,13 @@ def run(days: int = 250, max_stocks: int = 300, horizon: int = 5,
                         "best_icir": best_rows[0]["test_icir"] if best_rows else 0})
         if progress:
             try:
+                snap = sorted(cache.values(),
+                              key=lambda r: float(r.get("fitness") or 0),
+                              reverse=True)[:60]
                 progress({"generation": gen, "total": generations,
                           "evaluated": len(cache),
                           "best": best_rows[:5],
-                          "rows": best_rows})
+                          "rows": snap})
             except Exception:  # noqa: BLE001
                 pass
 
@@ -301,6 +303,7 @@ def run(days: int = 250, max_stocks: int = 300, horizon: int = 5,
         pop = nxt[:int(population)]
 
     rows = [r for r in cache.values() if r]
+    total_evaluated = len(rows)
     rows.sort(key=lambda r: float(r.get("fitness") or 0), reverse=True)
     rows = rows[:60]
     # 相关性去重 + 样本外过滤(面板已缓存,不再重复求值)
@@ -331,7 +334,7 @@ def run(days: int = 250, max_stocks: int = 300, horizon: int = 5,
     for r in rows:
         r["selected"] = any(s["expr"] == r["expr"] for s in selected)
     return {"ok": True, "rows": rows, "selected": selected,
-            "horizon": horizon, "n_candidates": len(rows),
+            "horizon": horizon, "n_candidates": total_evaluated,
             "n_codes": len(panel.get("codes") or panel), "days": days,
             "market": market, "rounds": len(history),
             "rounds_history": history,

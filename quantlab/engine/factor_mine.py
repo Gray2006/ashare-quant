@@ -24,7 +24,7 @@ from . import dsl
 from . import factor_analysis as fa
 
 RESULT_DIR = USER_DIR / "factor_mine"
-
+LIBRARY = USER_DIR / "factor_library.json"
 TEMPLATES: list[tuple[str, str]] = [
     ("动量", "roc(close,{n})"),
     ("反转", "-roc(close,{n})"),
@@ -39,10 +39,6 @@ TEMPLATES: list[tuple[str, str]] = [
 ]
 
 WINDOWS = (3, 5, 10, 20, 60)
-LIBRARY = USER_DIR / "factor_library.json"
-
-
-
 
 
 def candidates(windows: tuple[int, ...] = WINDOWS) -> list[dict]:
@@ -158,8 +154,10 @@ def _metrics(fac: pd.DataFrame, fwd: pd.DataFrame, horizon: int) -> dict:
         lay = pd.concat(layer_means, axis=1).mean(axis=1).sort_index()
         layers = [round(float(v), 5) for v in lay.tolist()]
         spread = round(float(lay.iloc[-1] - lay.iloc[0]), 5)
-        mono = round(float(pd.Series(layers).corr(pd.Series(range(5)),
-                                                  method="spearman")), 3)
+        # 分层单调性:秩相关。pandas 的 method="spearman" 会去 import scipy,
+        # 而 venv 里没有 scipy —— 先 rank 再算 Pearson 等价,且不依赖 scipy。
+        mono = round(float(pd.Series(layers).rank().corr(
+            pd.Series(range(5)).rank())), 3)
     else:
         layers, spread, mono = [], 0.0, 0.0
     # 样本外:前 70% 训练,后 30% 测试;再看 3 段稳定性
@@ -276,7 +274,9 @@ def save_factor(expr: str, label: str = "", stats: dict | None = None) -> bool:
     lib.append({"expr": expr, "label": (label or expr)[:80],
                 "stats": {k: v for k, v in (stats or {}).items()
                           if k in ("ic", "icir", "win", "coverage", "turnover",
-                                   "spread", "mono", "horizon")},
+                                   "spread", "mono", "horizon", "train_ic",
+                                   "train_icir", "test_ic", "test_icir",
+                                   "stability", "risk", "oos_ok")},
                 "created": time.strftime("%Y-%m-%d %H:%M")})
     try:
         LIBRARY.parent.mkdir(parents=True, exist_ok=True)
@@ -306,7 +306,8 @@ def score_panel(panel: dict, factors: list[dict]) -> pd.DataFrame:
         if fac.empty:
             continue
         r = fac.rank(axis=1, pct=True)
-        sign = 1.0 if float(f.get("ic") or 1) >= 0 else -1.0
+        # 方向优先用样本外 IC;没有才退回训练 IC
+        sign = 1.0 if float(f.get("test_ic", f.get("ic")) or 0) >= 0 else -1.0
         part = (r - 0.5) * sign
         total = part if total is None else total.add(part, fill_value=0)
     if total is None:
@@ -537,7 +538,7 @@ def iter_mine(days: int = 250, max_stocks: int = 300, horizon: int = 5,
                                            abs(float(r.get("test_icir") or 0)),
                                            abs(float(r.get("icir") or 0))),
                       reverse=True)
-        chosen, chosen_f = [], {}
+        chosen = []
         for r in rows:
             if len(chosen) >= 30:
                 break
@@ -593,7 +594,9 @@ def iter_mine(days: int = 250, max_stocks: int = 300, horizon: int = 5,
         if low_rounds >= 2 and rd >= 3:
             break
 
-    rows = sorted(pool, key=lambda r: abs(float(r.get("icir") or 0)),
+    rows = sorted(pool, key=lambda r: (bool(r.get("oos_ok")),
+                                       abs(float(r.get("test_icir") or 0)),
+                                       abs(float(r.get("icir") or 0))),
                   reverse=True)
     return {"ok": True, "rows": rows, "selected": chosen,
             "horizon": horizon, "n_candidates": len(rows),
