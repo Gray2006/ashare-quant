@@ -13,8 +13,9 @@ import time
 from PySide6.QtCore import QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QFrame, QHBoxLayout,
-                               QLabel, QMainWindow, QPushButton, QScrollArea,
-                               QStackedWidget, QStatusBar, QVBoxLayout, QWidget)
+                               QLabel, QMainWindow, QMessageBox, QPushButton,
+                               QScrollArea, QStackedWidget, QStatusBar,
+                               QVBoxLayout, QWidget)
 
 from ..config import cfg
 from ..engine.hub import QuoteHub
@@ -201,6 +202,8 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         QTimer.singleShot(20000, self._auto_factor_mine)
+        # 启动后后台问一次 GitHub,有新版本才提醒;一天最多一次,失败静默
+        QTimer.singleShot(8000, self._auto_check_update)
 
         self._clock = QTimer(self)
         self._clock.timeout.connect(self._tick)
@@ -367,6 +370,51 @@ class MainWindow(QMainWindow):
                 pass
 
         threading.Thread(target=work, name="factor-auto", daemon=True).start()
+
+    # ------------------------------------------------------------ 更新提醒
+    def _auto_check_update(self) -> None:
+        """启动后问一次 GitHub。一天一次,失败静默,有新版本才弹。"""
+        import datetime as dt
+
+        from .. import updater
+        from ..engine.hub import TaskRunner
+
+        today = dt.date.today().isoformat()
+        if str(self.cfg.get("update.last_check_day") or "") == today:
+            return
+        url = str(self.cfg.get("update.repo_url") or "Gray2006/ashare-quant")
+        self.cfg.set("update.last_check_day", today, save=True)
+        job = TaskRunner(lambda: updater.check(url))
+        job.succeeded.connect(self._on_update_checked)
+        job.failed.connect(lambda _e: None)      # 网络不通不打扰
+        self._upd_job = job
+        job.start()
+
+    def _on_update_checked(self, info) -> None:
+        from .. import updater
+        from ..version import __version__
+
+        info = info if isinstance(info, dict) else {}
+        latest = str(info.get("version") or "")
+        if not latest or not updater.is_newer(latest, __version__):
+            return
+        box = QMessageBox(self)
+        box.setWindowTitle("有新版本")
+        box.setIcon(QMessageBox.Information)
+        box.setText(f"发现新版本 v{latest}（当前 v{__version__}）")
+        box.setInformativeText("去设置页可以看更新说明并下载")
+        b_go = box.addButton("去更新", QMessageBox.AcceptRole)
+        box.addButton("以后再说", QMessageBox.RejectRole)
+        box.setModal(False)
+        box.finished.connect(lambda _r: self._update_go(box, b_go))
+        box.show()
+
+    def _update_go(self, box, b_go) -> None:
+        if box.clickedButton() is not b_go:
+            return
+        keys = [k for _n, k, _h in NAV]
+        if "settings" in keys:
+            self._go(keys.index("settings"))
 
     def _wire_page(self, key: str, page) -> None:
         """页面信号接到主窗口。只有真造出来的页面才接线。"""
