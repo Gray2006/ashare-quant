@@ -36,6 +36,15 @@ TEMPLATES: list[tuple[str, str]] = [
     ("成交额趋势", "ts_mean(amount,{n})/amount-1"),
     ("RSI反转", "50-rsi({n})"),
     ("价格Z", "(close-ts_mean(close,{n}))/ts_std(close,{n})"),
+    # ---- 下面几条是照 qlib Alpha158 的算子补的:趋势的斜率/干净度/残差、
+    # 收益率分布形状、量价协方差。原来只有均值和标准差,因子空间窄一大截。
+    ("趋势斜率", "slope(close,{n})/(close+1e-9)"),
+    ("趋势干净度", "rsquare(close,{n})"),
+    ("趋势残差", "resi(close,{n})/(close+1e-9)"),
+    ("收益偏度", "-skew(roc(close,1),{n})"),
+    ("收益峰度", "-kurt(roc(close,1),{n})"),
+    ("中位偏离", "quantile(close,{n},0.5)/(close+1e-9)-1"),
+    ("量价协方差", "ts_cov(roc(close,1),volume/ts_mean(volume,{n}),{n})"),
 ]
 
 WINDOWS = (3, 5, 10, 20, 60)

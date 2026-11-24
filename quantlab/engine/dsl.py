@@ -1310,6 +1310,72 @@ _register("ts_mean", (2, 2), lambda ctx, a: np.asarray(
     _series(a[0]).rolling(_win(a[1], "ts_mean", ctx), min_periods=1).mean(),
     dtype="float64"), "ts_mean(x,n) 时序均值(= ma(x,n))", window_at=-1, group="时序")
 
+# ---- 统计矩与回归(补 Alpha158 用到、这里缺的算子) ------------------
+# qlib 的 Alpha158 里 Slope/Rsquare/Resi/skew/kurt/quantile 都是主力,
+# 缺了就只能算均值方差那几样,因子空间窄一大截。
+
+
+def _linfit(w) -> tuple[float, float, float]:
+    """对一段窗口做 y ~ a + b*x 的最小二乘,返回 (斜率, R², 末点残差)。"""
+    y = np.asarray(w, dtype="float64")
+    n = len(y)
+    if n < 2 or not np.all(np.isfinite(y)):
+        return (np.nan, np.nan, np.nan)
+    x = np.arange(n, dtype="float64")
+    xm, ym = x.mean(), y.mean()
+    sxx = float(((x - xm) ** 2).sum())
+    if sxx <= 0:
+        return (0.0, 0.0, 0.0)
+    b = float(((x - xm) * (y - ym)).sum() / sxx)
+    a = ym - b * xm
+    yhat = a + b * x
+    ss_res = float(((y - yhat) ** 2).sum())
+    ss_tot = float(((y - ym) ** 2).sum())
+    r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
+    return (b, r2, float(y[-1] - yhat[-1]))
+
+
+_register("skew", (2, 2), lambda ctx, a: np.asarray(
+    _series(a[0]).rolling(_win(a[1], "skew", ctx), min_periods=3).skew(),
+    dtype="float64"), "skew(x,n) 时序偏度", window_at=-1, group="时序")
+_register("kurt", (2, 2), lambda ctx, a: np.asarray(
+    _series(a[0]).rolling(_win(a[1], "kurt", ctx), min_periods=4).kurt(),
+    dtype="float64"), "kurt(x,n) 时序峰度", window_at=-1, group="时序")
+_register("var", (2, 2), lambda ctx, a: np.asarray(
+    _series(a[0]).rolling(_win(a[1], "var", ctx), min_periods=2).var(ddof=0),
+    dtype="float64"), "var(x,n) 时序方差", window_at=-1, group="时序")
+_register("med", (2, 2), lambda ctx, a: np.asarray(
+    _series(a[0]).rolling(_win(a[1], "med", ctx), min_periods=1).median(),
+    dtype="float64"), "med(x,n) 时序中位数", window_at=-1, group="时序")
+_register("mad", (2, 2), lambda ctx, a: np.asarray(
+    _series(a[0]).rolling(_win(a[1], "mad", ctx), min_periods=2).apply(
+        lambda w: float(np.abs(w - np.mean(w)).mean()), raw=True),
+    dtype="float64"), "mad(x,n) 平均绝对偏差", window_at=-1, group="时序")
+_register("quantile", (2, 3), lambda ctx, a: np.asarray(
+    _series(a[0]).rolling(_win(a[1], "quantile", ctx), min_periods=2).quantile(
+        float(_scalar(a[2])) if len(a) > 2 else 0.5),
+    dtype="float64"), "quantile(x,n,q) 滚动分位数,q 默认 0.5", window_at=1, group="时序")
+_register("prod", (2, 2), lambda ctx, a: np.asarray(
+    _series(a[0]).rolling(_win(a[1], "prod", ctx), min_periods=1).apply(
+        lambda w: float(np.prod(w)), raw=True),
+    dtype="float64"), "prod(x,n) 滚动乘积", window_at=-1, group="时序")
+_register("slope", (2, 2), lambda ctx, a: np.asarray(
+    _series(a[0]).rolling(_win(a[1], "slope", ctx), min_periods=2).apply(
+        lambda w: _linfit(w)[0], raw=True), dtype="float64"),
+    "slope(x,n) n 根线性回归斜率", window_at=-1, group="时序")
+_register("rsquare", (2, 2), lambda ctx, a: np.asarray(
+    _series(a[0]).rolling(_win(a[1], "rsquare", ctx), min_periods=2).apply(
+        lambda w: _linfit(w)[1], raw=True), dtype="float64"),
+    "rsquare(x,n) 线性回归 R²(趋势的干净程度)", window_at=-1, group="时序")
+_register("resi", (2, 2), lambda ctx, a: np.asarray(
+    _series(a[0]).rolling(_win(a[1], "resi", ctx), min_periods=2).apply(
+        lambda w: _linfit(w)[2], raw=True), dtype="float64"),
+    "resi(x,n) 当前值相对回归线的残差", window_at=-1, group="时序")
+_register("ts_cov", (3, 3), lambda ctx, a: np.asarray(
+    _series(a[0]).rolling(_win(a[2], "ts_cov", ctx), min_periods=3).cov(
+        _series(a[1])), dtype="float64"),
+    "ts_cov(x,y,n) n 根滚动协方差", window_at=-1, group="时序")
+
 # ---- 指标 ----------------------------------------------------------
 
 def _looks_window(node: Node) -> bool:
