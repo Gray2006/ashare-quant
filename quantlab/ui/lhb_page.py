@@ -81,6 +81,7 @@ class LhbPage(QWidget):
             widths=[70, 96, 70, 88, 440, 104], stretch_col=4)
         self.tbl.setObjectName("LhbBoard")
         self.tbl.itemSelectionChanged.connect(self._on_select)
+        self.tbl.doubleClicked.connect(lambda *_: self._jump(self.tbl))
         list_card.add(self.tbl, 1)
         board.add(list_card, 0, 0, min_h=260)
         self.list_card = list_card
@@ -116,6 +117,8 @@ class LhbPage(QWidget):
         self.pred_tbl = table(["代码", "名称", "方向", "分数", "理由"],
                               widths=[80, 120, 60, 80, 460], stretch_col=4)
         self.pred_tbl.setObjectName("LhbPred")
+        self.pred_tbl.setToolTip("双击跳到行情页看这只票")
+        self.pred_tbl.doubleClicked.connect(lambda *_: self._jump(self.pred_tbl))
         self.hot_card.add(self.pred_tbl, 1)
         board.add(self.hot_card, 1, 0, min_h=200)
 
@@ -305,6 +308,20 @@ class LhbPage(QWidget):
         self._tasks = [t for t in self._tasks if t.isRunning()]
         self._tasks.append(r)
         r.start()
+
+    def _jump(self, tbl) -> None:
+        """双击一行 → 行情页选中这只票(不写进自选)。"""
+        row = tbl.currentRow()
+        if row < 0:
+            return
+        item = tbl.item(row, 0)
+        code = (item.text() or "").strip() if item is not None else ""
+        if len(code) != 6 or not code.isdigit():
+            return
+        win = self.window()
+        fn = getattr(win, "_goto_stock", None)
+        if callable(fn):
+            fn(code)
 
     def _open_filter(self):
         from .hotfilter_dialog import HotFilterDialog

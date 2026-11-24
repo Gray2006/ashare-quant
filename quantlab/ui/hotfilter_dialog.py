@@ -34,10 +34,26 @@ class HotFilterDialog(QDialog):
         card = Card("负面清单", hint="大额净买入 + 60 日区间高位 = 给别人抬轿")
         self.tbl = table(["代码", "名称", "60日位置", "近3日净买入(亿)", "理由"],
                          [80, 110, 80, 120, 380], stretch_col=4)
+        self.tbl.setToolTip("双击跳到行情页看这只票")
+        self.tbl.doubleClicked.connect(lambda *_: self._jump())
         card.add(self.tbl, 1)
         lay.addWidget(card, 1)
 
         self.refresh()
+
+    def _jump(self) -> None:
+        row = self.tbl.currentRow()
+        if row < 0:
+            return
+        item = self.tbl.item(row, 0)
+        code = (item.text() or "").strip() if item is not None else ""
+        if len(code) != 6 or not code.isdigit():
+            return
+        win = self.parent().window() if self.parent() else None
+        fn = getattr(win, "_goto_stock", None)
+        if callable(fn):
+            self.accept()
+            fn(code)
 
     def refresh(self) -> None:
         if self._task is not None and self._task.isRunning():

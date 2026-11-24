@@ -38,13 +38,29 @@ class SeatDialog(QDialog):
 
         self.view = QTextBrowser()
         self.view.setOpenExternalLinks(False)
+        self.view.setOpenLinks(False)      # 自己处理 code: 锚点,别让 Qt 去开浏览器
         self.view.setStyleSheet(
             f"QTextBrowser{{background:#0e141b;border:1px solid {BORDER};"
             f"border-radius:6px;color:{TEXT};padding:10px;}}")
         self.view.setFont(QFont("Microsoft YaHei UI", 10))
+        self.view.anchorClicked.connect(self._on_link)
         lay.addWidget(self.view, 1)
 
         self.refresh()
+
+    def _on_link(self, url) -> None:
+        """点案例里的股票代码 → 关掉弹窗,跳到行情页。"""
+        s = url.toString() if hasattr(url, "toString") else str(url)
+        if not s.startswith("code:"):
+            return
+        code = s[5:].strip()
+        if len(code) != 6 or not code.isdigit():
+            return
+        win = self.parent().window() if self.parent() else None
+        fn = getattr(win, "_goto_stock", None)
+        if callable(fn):
+            self.accept()
+            fn(code)
 
     def refresh(self) -> None:
         if self._task is not None and self._task.isRunning():

@@ -592,8 +592,10 @@ def render_markdown(p: dict) -> str:
         return d if x is None else format(x, spec)
 
     for x in p["samples"]:
+        # 代码做成锚点:弹窗里点一下就能跳到行情页(statusbar 之外的唯一交互入口)
         lines.append(
-            f"| {x['day']} | {x['code']} | {x['name']} | {f(x['pct'], '+.2%')} | "
+            f"| {x['day']} | [{x['code']}](code:{x['code']}) | {x['name']} | "
+            f"{f(x['pct'], '+.2%')} | "
             f"{x['limit'] or '-'} | {f(x['pos'], '.0%')} | {x['net'] / 1e4:+.0f} | "
             f"{f(x['ret5'], '+.2%')} |")
     lines.append("")
