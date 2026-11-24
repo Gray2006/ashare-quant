@@ -11,7 +11,9 @@
 """
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
@@ -25,11 +27,31 @@ class CloudError(RuntimeError):
     pass
 
 
+def _defaults() -> dict:
+    """随包分发的默认回流服务(cloud_defaults.json)。
+
+    这是「只收回流样本」的公共 key,写死在开源仓库里也没关系:
+    服务端限制了 scope,拿它调模型/信号接口一律 403。
+    """
+    for base in (Path(__file__).resolve().parent.parent,
+                 Path(__file__).resolve().parent):
+        f = base / "cloud_defaults.json"
+        if f.exists():
+            try:
+                return json.loads(f.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                return {}
+    return {}
+
+
 def _conf() -> dict:
     c = cfg().get("cloud") or {}
-    # 环境变量优先:方便打包/自建服务时不改 config.json
-    url = str(os.environ.get("GRAY_CLOUD_URL") or c.get("base_url") or "")
-    key = str(os.environ.get("GRAY_CLOUD_KEY") or c.get("key") or "")
+    d = _defaults()
+    # 优先级:环境变量 > 用户配置 > 随包默认
+    url = str(os.environ.get("GRAY_CLOUD_URL") or c.get("base_url")
+              or d.get("base_url") or "")
+    key = str(os.environ.get("GRAY_CLOUD_KEY") or c.get("key")
+              or d.get("public_key") or "")
     return {
         "base_url": url.rstrip("/"),
         "key": key,
@@ -99,7 +121,7 @@ def health() -> dict:
 
 
 def feedback_push(events: list[dict], timeout: float = 20) -> dict:
-    return _call("POST", "/v1/feedback/push", body={"events": events},
+    return _call("POST", "/v1/feedback/events", body={"events": events},
                  timeout=timeout)
 
 

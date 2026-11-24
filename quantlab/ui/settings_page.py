@@ -134,8 +134,15 @@ class SettingsPage(QWidget):
     def load(self) -> None:
         self.refresh.setValue(float(self.cfg.get("refresh_seconds.quote", 1.0)))
         self.offline.setChecked(bool(self.cfg.get("offline", False)))
-        self.fb_url.setText(str(self.cfg.get("cloud.base_url", "") or ""))
-        self.fb_key.setText(str(self.cfg.get("cloud.key", "") or ""))
+        try:
+            from .. import cloud
+            d = cloud._defaults()
+        except Exception:  # noqa: BLE001
+            d = {}
+        self.fb_url.setText(str(self.cfg.get("cloud.base_url", "")
+                                or d.get("base_url") or ""))
+        self.fb_key.setText(str(self.cfg.get("cloud.key", "")
+                                or d.get("public_key") or ""))
         on = bool(self.cfg.get("feedback.enabled", False))
         self.fb_on.blockSignals(True)
         self.fb_on.setChecked(on)
