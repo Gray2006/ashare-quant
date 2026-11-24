@@ -161,6 +161,12 @@ class SettingsPage(QWidget):
         self.up_hint.setWordWrap(True)
         self.up_hint.setStyleSheet(f"color:{TEXT_DIM};")
         u_form.addRow("", self.up_hint)
+        self.up_notes = QPlainTextEdit()
+        self.up_notes.setReadOnly(True)
+        self.up_notes.setFixedHeight(170)
+        self.up_notes.setVisible(False)
+        self.up_notes.setPlaceholderText("")
+        u_form.addRow(self.up_notes)
         card_up._lay.addLayout(u_form)
         lay.addWidget(card_up)
 
@@ -335,6 +341,8 @@ class SettingsPage(QWidget):
         self._update_info = {}
         self.btn_up_check.setEnabled(False)
         self.btn_up_do.setEnabled(False)
+        self.up_notes.setVisible(False)
+        self.up_notes.setPlainText("")
         self.up_hint.setText("正在问 GitHub …")
         self.cfg.set("update.repo_url", url, save=True)
         job = TaskRunner(lambda: updater.check(url))
@@ -350,13 +358,27 @@ class SettingsPage(QWidget):
         self._update_info = info
         latest = str(info.get("version") or "")
         remote = info.get("tag") or latest or "?"
-        if updater.is_newer(latest, __version__):
+        newer = updater.is_newer(latest, __version__)
+        if newer:
             self.up_hint.setText(
                 f"有新版本 {remote}(当前 v{__version__})。点「下载并更新」")
             self.btn_up_do.setEnabled(True)
         else:
             self.up_hint.setText(f"已经是最新的 v{__version__}(远端 {remote})")
             self.btn_up_do.setEnabled(False)
+        self._show_notes(info.get("notes") or "")
+
+    def _show_notes(self, text: str) -> None:
+        """把 release 说明摊在界面上,太长就截断,全文在发布页。"""
+        text = (text or "").strip()
+        if not text:
+            self.up_notes.setVisible(False)
+            self.up_notes.setPlainText("")
+            return
+        limit = 1800
+        shown = text if len(text) <= limit else text[:limit].rstrip() + "\n\n…(全文见发布页)"
+        self.up_notes.setPlainText(shown)
+        self.up_notes.setVisible(True)
 
     def _update_fail(self, msg) -> None:
         self.up_hint.setText(f"检查失败:{str(msg).splitlines()[0][:120]}")
