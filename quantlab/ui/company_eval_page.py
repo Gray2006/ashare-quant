@@ -262,6 +262,10 @@ class CompanyEvalPage(QWidget):
         if job in self._tasks:
             self._tasks.remove(job)
         self.btn.setEnabled(True)
+        # 兜底:只要手里还有上一份报告,导出/复制就不该一直是灰的
+        self.btn_save.setEnabled(bool(self._markdown))
+        self.btn_copy.setEnabled(bool((self._data or {}).get("points")))
+        self.btn_pdf.setEnabled(bool(self.report.toPlainText()))
 
     def _fail(self, msg: str):
         self.hint.setText(f"生成失败:{msg.splitlines()[0][:90]}")

@@ -344,6 +344,8 @@ class MainWindow(QMainWindow):
             page.open_stock.connect(self._goto_stock)
         elif key == "quote":
             page.open_sector.connect(self._goto_sector)
+        elif key == "company":
+            page.open_eval.connect(self._goto_eval)
         elif key == "risk":
             page.goto_quote.connect(self._goto_stock)
         elif key == "settings":

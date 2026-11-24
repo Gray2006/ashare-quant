@@ -84,5 +84,5 @@ if "%GRAY_NO_LAUNCH%"=="1" (
     echo 已设置 GRAY_NO_LAUNCH=1,不自动启动
     exit /b 0
 )
-start "" "%VPY%w.exe" run.py
+start "" ".venv\Scripts\pythonw.exe" run.py
 exit /b 0
