@@ -6,6 +6,12 @@
 
 ## 一键安装（Windows，推荐）
 
+**最省事**：下载 [`install-online.bat`](https://raw.githubusercontent.com/Gray2006/ashare-quant/main/install-online.bat)，双击。
+它会自动查 GitHub 最新版本、下载、解压到 `%USERPROFILE%\ashare-quant`，
+再建虚拟环境、装依赖、生成桌面快捷方式。全程只需要一个文件。
+
+或者手动：
+
 1. 下载仓库 ZIP，解压到一个**普通目录**（不要放 `C:\Program Files`，那里没写权限）
 2. 双击 `install.bat`
 3. 等 1~3 分钟（第一次要下载 PySide6 等依赖）
@@ -16,6 +22,7 @@
 
 - 启动：`start.bat`，或桌面快捷方式；想看报错用 `start.bat --console`
 - 卸载：`uninstall.bat`（只删 `.venv` 和快捷方式，配置/缓存/待上传样本都保留）
+- 已装过再跑 `install-online.bat` 会提示「已经装过」，升级请走程序内「设置 → 检查更新」
 
 ## 功能
 
