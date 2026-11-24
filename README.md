@@ -66,6 +66,23 @@ python run.py --smoke      # 真建主窗口逐页切换(offscreen 下可用)
 
 接口随时可能变；抓不到时页面会显示数据源状态，不会拿假数据顶上。境外接口在部分网络下不可达，属正常。
 
+## 数据安全
+
+- **凭据字段**：config.json 里的接口密钥 / 本机 token 会加密落盘：Windows 用
+  DPAPI（绑定当前用户），其他平台用 `.field.key` 的 Fernet 密钥（权限 600），
+  程序读写时透明还原。加密后的值带 `dpapi1:` / `fernet1:` 前缀。
+- **本地数据保险箱**：程序不运行时，可以把 `config.json` 与 `data/` 打包成
+  一个 AES-256-GCM 加密的 `.vault` 文件：
+
+  ```bat
+  python tools/secure_data.py status
+  python tools/secure_data.py encrypt
+  python tools/secure_data.py decrypt vault/backup-xxxx.vault
+  ```
+
+  口令用 scrypt 派生，忘了就解不开。运行中的 SQLite 仍是明文（换 SQLCipher
+  要换驱动、迁移库，风险大），所以保险箱是「关机 / 备份 / 带走」时用的。
+
 ## 明确边界
 
 - 只做多方向的研究工具，**不接券商、不同花顺、不下单、不自动交易**。
