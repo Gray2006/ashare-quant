@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import time
-import csv
-from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
-                               QPushButton, QTabWidget, QTableWidget, QVBoxLayout, QWidget)
+                               QPushButton, QTabWidget, QVBoxLayout, QWidget)
 
 from ..config import APP_DIR
 from ..data import em, moneyflow, sector
@@ -16,8 +14,8 @@ from ..engine import screener
 from ..engine.hub import TaskRunner
 from ..utils import fmt_amount, fmt_pct, fmt_price
 from .board import Board
-from .common import Card, label, pnl_color, set_cell, table
-from .theme import BORDER, DOWN, TEXT, TEXT_DIM, TEXT_MUT, UP
+from .common import Card, pnl_color, set_cell, table
+from .theme import TEXT_DIM, TEXT_MUT
 
 
 class ScreenPage(QWidget):

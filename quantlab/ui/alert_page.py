@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (QComboBox, QDoubleSpinBox, QHBoxLayout, QLineEdit,
                                QPushButton, QVBoxLayout, QWidget)
 
@@ -24,8 +24,8 @@ from ..data.store import store
 from ..engine.hub import TaskRunner
 from ..utils import safe_float
 from .board import Board
-from .common import Card, label, pnl_color, set_cell, table
-from .theme import ACCENT, TEXT_DIM, TEXT_MUT, UP
+from .common import Card, label, set_cell, table
+from .theme import TEXT_DIM, TEXT_MUT, UP
 
 KINDS = [("价格上穿", "above"), ("价格下穿", "below"),
          ("涨幅超过(%)", "gain"), ("跌幅超过(%)", "drop"),

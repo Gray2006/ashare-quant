@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import (QHBoxLayout, QLabel, QPushButton, QTextBrowser,
+from PySide6.QtWidgets import (QPushButton, QTextBrowser,
                                QVBoxLayout, QWidget)
 
 from ..config import cfg
@@ -20,7 +20,7 @@ from ..engine import selflearn as sl
 from ..engine.hub import TaskRunner
 from .board import Board
 from .common import Card, StatCard, label, set_cell, table
-from .theme import DOWN, FLAT, TEXT, TEXT_DIM, TEXT_MUT, UP
+from .theme import DOWN, TEXT, TEXT_DIM, TEXT_MUT, UP
 
 
 class LearnPage(QWidget):

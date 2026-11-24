@@ -17,8 +17,7 @@ import numpy as np
 import pandas as pd
 
 from . import dsl
-from .dsl import (COLUMNS, DslError, compile_expr, evaluate, evaluate_value,
-                  required_bars, validate)
+from .dsl import (DslError, evaluate, required_bars, validate)
 from .strategy import BaseStrategy
 
 #: 全部函数名(给帮助窗口与自检做覆盖检查)

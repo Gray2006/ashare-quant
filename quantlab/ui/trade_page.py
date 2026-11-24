@@ -4,19 +4,18 @@ from __future__ import annotations
 
 import time
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (QComboBox, QDoubleSpinBox, QHBoxLayout, QLabel,
-                               QMessageBox, QPushButton, QSpinBox, QTableWidget,
-                               QVBoxLayout, QWidget)
+                               QMessageBox, QPushButton, QSpinBox, QVBoxLayout, QWidget)
 
 from ..broker.risk import RiskEngine
 from ..config import cfg
 from ..engine.hub import TaskRunner
 from ..engine.models import SIDE_BUY, SIDE_SELL
-from ..utils import fmt_amount, fmt_price, normalize_code
+from ..utils import fmt_price, normalize_code
 from .board import Board
 from .common import Card, label, pnl_color, set_cell, table, watch_codes
-from .theme import BORDER, DOWN, FLAT, TEXT, TEXT_DIM, UP, WARN
+from .theme import DOWN, FLAT, TEXT_DIM, UP, WARN
 
 
 class TradePage(QWidget):

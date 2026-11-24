@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import math
 
-from .adaptive import AdaptiveSizer, DrawdownGuard, last_equity
+from .adaptive import AdaptiveSizer, DrawdownGuard
 
 # 全自动模式的默认目标
 DEF = {

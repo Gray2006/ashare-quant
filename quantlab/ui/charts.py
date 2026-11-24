@@ -10,11 +10,11 @@ import pandas as pd
 import pyqtgraph as pg
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QPicture
-from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QHeaderView, QLabel,
+from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QLabel,
                                QStackedWidget, QTableWidget, QTableWidgetItem,
                                QVBoxLayout, QWidget)
 
-from .theme import ACCENT, BG2, DOWN, FLAT, GRID, TEXT_DIM, TEXT_MUT, UP
+from .theme import ACCENT, DOWN, TEXT_DIM, TEXT_MUT, UP
 
 pg.setConfigOptions(antialias=True, background="#0d141d", foreground=TEXT_MUT)
 

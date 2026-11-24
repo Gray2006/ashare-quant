@@ -16,7 +16,7 @@ from ..engine import forecast as fc
 from ..engine.hub import TaskRunner
 from ..utils import fmt_price
 from .board import Board
-from .common import Card, StatCard, label, set_cell, table
+from .common import Card, label, set_cell, table
 from .theme import BORDER, DOWN, FLAT, TEXT, TEXT_DIM, TEXT_MUT, UP
 
 VERDICT_COLOR = {"看多": UP, "偏多": "#f0883e", "中性": FLAT,

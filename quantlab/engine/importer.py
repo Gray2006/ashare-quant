@@ -91,7 +91,7 @@ def _strip_tag(line: str) -> str:
     out = line
     for t in BUY_TAGS + SELL_TAGS:
         out = re.sub(rf"^\s*{re.escape(t)}\s*[:：]?\s*", "", out, flags=re.I)
-        out = re.sub(rf"^\s*(?:当|如果|若)\s*", "", out)
+        out = re.sub(r"^\s*(?:当|如果|若)\s*", "", out)
     return out.strip()
 
 

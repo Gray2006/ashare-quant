@@ -12,7 +12,7 @@ from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (QDialog, QLineEdit, QListWidget, QListWidgetItem,
                               QVBoxLayout)
 
-from .theme import ACCENT, BG2, BORDER, TEXT, TEXT_DIM, TEXT_MUT
+from .theme import ACCENT, BG2, BORDER, TEXT, TEXT_DIM
 
 
 def _score(query: str, name: str, group: str, hint: str, key: str = "") -> int:

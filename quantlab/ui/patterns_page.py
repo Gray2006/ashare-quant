@@ -8,8 +8,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtWidgets import (QAbstractScrollArea, QComboBox, QHBoxLayout, QLabel,
-                               QLineEdit, QPlainTextEdit, QPushButton, QVBoxLayout,
+from PySide6.QtWidgets import (QAbstractScrollArea, QComboBox, QHBoxLayout, QPlainTextEdit, QPushButton, QVBoxLayout,
                                QWidget)
 
 from ..data.kline import get_kline

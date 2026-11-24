@@ -11,7 +11,7 @@ from ..engine.hub import TaskRunner
 from ..engine import rules as rules_mod
 from ..utils import normalize_code
 from .common import label, set_cell, table
-from .theme import DOWN, TEXT, TEXT_DIM, UP
+from .theme import DOWN, TEXT, UP
 
 
 class ImportDialog(QDialog):

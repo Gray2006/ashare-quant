@@ -49,8 +49,7 @@ from .trade_page import TradePage
 from .review_page import ReviewPage
 from .learn_page import LearnPage
 from .auto_page import AutoPage
-from .theme import (ACCENT, BG4, BORDER, DOWN, FLAT, QSS, TEXT, TEXT_DIM,
-                    TEXT_MUT, UP, apply_app_palette)
+from .theme import (ACCENT, BORDER, DOWN, FLAT, QSS, TEXT_MUT, UP, apply_app_palette)
 from .world_page import WorldPage
 
 # 导航按「干什么」分组。公开版不含交易、加密、云端与私有学习页。

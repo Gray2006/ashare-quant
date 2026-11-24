@@ -13,7 +13,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ["GRAY_HOME"] = tempfile.mkdtemp(prefix="gray-gp-")
 
-from quantlab.engine import dsl  # noqa: E402
 from quantlab.engine import factor_gp as gp  # noqa: E402
 from quantlab.engine import factor_mine as fm  # noqa: E402
 

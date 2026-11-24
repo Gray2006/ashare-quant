@@ -23,8 +23,7 @@ A 股是 T+1,「做T」靠底仓绕开:卖出的是昨天以前买的底仓,当�
 """
 from __future__ import annotations
 
-import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from . import exchange
 

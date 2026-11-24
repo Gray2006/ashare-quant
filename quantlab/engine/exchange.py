@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from ..utils import board_of, normalize_code
+from ..utils import board_of
 
 # 各板块涨跌幅(2026-07 口径)
 BOARD_LIMIT = {"沪主板": 0.10, "深主板": 0.10, "创业板": 0.20,

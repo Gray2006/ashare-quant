@@ -125,7 +125,7 @@ class StrategyPage(QWidget):
         detail = Card("策略详情", hint="选中左侧任意一行")
         self.detail_lay = detail.body()
         self.d_name = QLabel("—")
-        self.d_name.setStyleSheet(f"color:#ffffff;font-size:15px;font-weight:600;")
+        self.d_name.setStyleSheet("color:#ffffff;font-size:15px;font-weight:600;")
         self.d_name.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.detail_lay.addWidget(self.d_name)
         self.d_kind = QLabel("")

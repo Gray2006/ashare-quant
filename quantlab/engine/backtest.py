@@ -15,8 +15,8 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-from ..data import em, kline as kl
-from ..utils import board_of, limit_pct, normalize_code
+from ..data import kline as kl
+from ..utils import limit_pct, normalize_code
 from . import exchange, indicators as ind
 from .models import Trade
 from .strategy import BaseStrategy

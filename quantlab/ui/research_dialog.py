@@ -5,16 +5,15 @@
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit,
+from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QLineEdit,
                                QMessageBox, QPlainTextEdit, QPushButton, QSpinBox,
-                               QVBoxLayout, QWidget)
+                               QVBoxLayout)
 
 from ..engine import research as research_mod
 from ..engine.hub import TaskRunner
 from ..utils import normalize_code
 from .common import label, pnl_color, set_cell, table
-from .theme import BORDER, DOWN, TEXT, TEXT_DIM, UP
+from .theme import DOWN, TEXT
 
 
 class ResearchDialog(QDialog):

@@ -31,7 +31,6 @@
 """
 from __future__ import annotations
 
-import json
 import math
 import time
 
@@ -474,7 +473,7 @@ def tune(profile: str, window: int = 300, alpha: float = 0.25,
         changes.append(("ic_floor", float(pf["ic_floor"]), round(new_floor, 4),
                         f"命中 {hit:.0%} 胜率 {win:.0%}:收紧门槛,少而精"))
         changes.append(("min_t", float(pf["min_t"]), round(new_t, 2),
-                        f"同上,把不显著的因子剔掉"))
+                        "同上,把不显著的因子剔掉"))
     elif hit > 0.30 and win > 0.55:
         new_floor = max(0.001, float(pf["ic_floor"]) * (1 - alpha))
         changes.append(("ic_floor", float(pf["ic_floor"]), round(new_floor, 4),

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QHBoxLayout, QLabel,
-                               QLineEdit, QPushButton, QSlider, QVBoxLayout,
+                               QPushButton, QSlider, QVBoxLayout,
                                QWidget)
 
 from ..data.kline import get_kline
@@ -16,7 +16,7 @@ from ..engine import chan, divergence, dow, resonance, smartmoney
 from ..engine.hub import TaskRunner
 from .board import Board
 from .charts import KLineWidget
-from .common import Card, StatCard, hbox, label, set_cell, table
+from .common import Card, StatCard, label, set_cell, table
 from .theme import ACCENT, DOWN, TEXT_DIM, TEXT_MUT, UP, WARN
 
 # 各层的颜色,图例也用它

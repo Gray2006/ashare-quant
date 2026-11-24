@@ -16,7 +16,6 @@
 """
 from __future__ import annotations
 
-import math
 
 # 分批阶梯(与 selflearn.TranchePlanner.LADDER 对齐,强度 0.5 落在中档)
 FIRST_RATIO = 0.34

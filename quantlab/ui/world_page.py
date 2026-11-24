@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QTimer, QUrl, Signal
+from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QLineEdit, QPushButton,
                                QVBoxLayout, QWidget)
 
@@ -16,7 +16,7 @@ from ..engine.hub import TaskRunner
 from ..utils import fmt_pct, fmt_price
 from .board import Board
 from .common import Card, label, pnl_color, set_cell, table
-from .theme import BORDER, DOWN, TEXT, TEXT_DIM, TEXT_MUT, UP
+from .theme import TEXT_DIM, TEXT_MUT
 
 KINDS = ["全部", "美股", "港股", "亚太", "欧洲", "商品", "汇率"]
 TAGS = ["全部", "美联储", "关税贸易", "地缘政治", "宏观数据", "A股市场",

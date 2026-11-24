@@ -73,7 +73,7 @@ class CardHead(QFrame):
         lay.addWidget(self.hint)
         lay.addStretch(1)
         self.tip = QLabel("⠿")
-        self.tip.setStyleSheet(f"color:#3a4757;font-size:11px;")
+        self.tip.setStyleSheet("color:#3a4757;font-size:11px;")
         lay.addWidget(self.tip)
         self.setToolTip("拖动四周的分栏线调整大小 · 双击标题栏铺满 / 还原")
         self.setCursor(Qt.ArrowCursor)

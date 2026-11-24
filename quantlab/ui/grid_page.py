@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (QComboBox, QGridLayout, QHBoxLayout, QLineEdit,
                                QPushButton, QVBoxLayout, QWidget)
 
@@ -14,7 +14,6 @@ from ..data.kline import get_kline
 from ..engine.hub import TaskRunner
 from .charts import KLineWidget
 from .common import Card, label
-from .theme import ACCENT, TEXT_DIM
 
 PERIODS = [("日线", 101), ("周线", 102), ("60 分钟", 60), ("30 分钟", 30)]
 DEFAULT_CODES = ["600519", "000001", "300750", "601318"]

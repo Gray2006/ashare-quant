@@ -22,8 +22,8 @@ from .research_dialog import ResearchDialog
 from ..engine.hub import TaskRunner
 from ..utils import fmt_price, parse_hhmm
 from .board import Board
-from .common import Card, StatCard, label, pnl_color, set_cell, table
-from .theme import BORDER, DOWN, TEXT, TEXT_DIM, UP, WARN
+from .common import Card, StatCard, default_code, label, set_cell, table
+from .theme import DOWN, TEXT_DIM, UP, WARN
 
 POOLS = [("全市场", "all"), ("沪深300", "hs300"), ("中证500", "zz500"),
          ("中证1000", "zz1000"), ("上证50", "sz50"), ("按成交额", "amount"),
@@ -1040,7 +1040,7 @@ class AutoPage(QWidget):
 
     def _reset_guard(self) -> None:
         try:
-            from ..engine.adaptive import AdaptiveSizer, DrawdownGuard
+            from ..engine.adaptive import DrawdownGuard
             acct = self.account.currentText() or "default"
             DrawdownGuard(acct).reset()
             self._refresh_guard()

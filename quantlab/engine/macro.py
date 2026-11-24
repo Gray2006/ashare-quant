@@ -9,10 +9,7 @@
 from __future__ import annotations
 
 import datetime as dt
-import re
 
-import numpy as np
-import pandas as pd
 
 from ..data import kline as kl
 from ..data import world

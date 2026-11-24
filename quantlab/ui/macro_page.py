@@ -2,16 +2,16 @@
 """大盘研判页:五维打分 + 要点/风险 + 交易规则速查。"""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton,
+from PySide6.QtCore import QTimer, Signal
+from PySide6.QtWidgets import (QDialog, QLabel, QPlainTextEdit, QPushButton,
                                QVBoxLayout, QWidget)
 
 from ..engine import exchange
 from ..engine import macro as macro_mod
 from ..engine.hub import TaskRunner
 from .board import Board
-from .common import Card, StatCard, label, pnl_color, set_cell, table
-from .theme import BORDER, DOWN, FLAT, TEXT, TEXT_DIM, UP
+from .common import Card, StatCard, set_cell, table
+from .theme import DOWN, FLAT, TEXT, TEXT_DIM, UP
 
 STANCE_COLOR = {"进攻": UP, "偏多": "#f0883e", "中性": FLAT, "偏空": "#58a6ff", "防守": DOWN}
 

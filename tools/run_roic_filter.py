@@ -21,7 +21,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 from quantlab.engine import factor_analysis as fa  # noqa: E402

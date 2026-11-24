@@ -5,14 +5,13 @@
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QPushButton,
                                QTextBrowser, QVBoxLayout)
 
 from ..engine.hub import TaskRunner
 from ..engine import seat_profile as sp
-from .theme import BORDER, TEXT, TEXT_DIM, TEXT_MUT
+from .theme import BORDER, TEXT, TEXT_MUT
 
 
 class SeatDialog(QDialog):

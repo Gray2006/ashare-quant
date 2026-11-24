@@ -9,7 +9,7 @@ memory/quantlab-alpha-verdict.md 的结论是这套因子在样本外的优势�
 from __future__ import annotations
 
 from PySide6.QtCore import QTimer, Signal
-from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QPlainTextEdit,
+from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QPlainTextEdit,
                                QPushButton, QVBoxLayout, QWidget)
 
 from ..config import cfg

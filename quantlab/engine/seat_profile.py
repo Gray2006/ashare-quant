@@ -16,7 +16,6 @@ T 日收盘根本买不到。用收盘价算收益会把「次日高开」这段
 from __future__ import annotations
 
 import datetime as dt
-import math
 
 from ..data.kline import get_kline
 

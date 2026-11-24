@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from quantlab.engine.t0 import (DayResult, T0Config, T0Engine, buy_fee,
+from quantlab.engine.t0 import (T0Config, T0Engine, buy_fee,
                                 daily_pseudo_bars, round_qty, sell_fee,
                                 summarize)
 

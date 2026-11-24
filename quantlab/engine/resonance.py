@@ -15,7 +15,6 @@ from __future__ import annotations
 import pandas as pd
 
 from . import indicators as ind
-from ..utils import safe_float
 
 
 def _last(series) -> float | None:
@@ -41,7 +40,7 @@ def votes(bars: list[dict]) -> list[dict]:
     ma5, ma10, ma20, ma60 = (_last(ind.ma(c, n)) for n in (5, 10, 20, 60))
     if None not in (ma5, ma10, ma20, ma60):
         if ma5 > ma10 > ma20 > ma60:
-            add("均线排列", 1, f"MA5>MA10>MA20>MA60,多头排列")
+            add("均线排列", 1, "MA5>MA10>MA20>MA60,多头排列")
         elif ma5 < ma10 < ma20 < ma60:
             add("均线排列", -1, "MA5<MA10<MA20<MA60,空头排列")
         else:

@@ -19,7 +19,7 @@ from __future__ import annotations
 import time
 
 from ..data import em
-from ..utils import normalize_code, safe_float
+from ..utils import normalize_code
 
 CACHE_TTL = 600.0
 _cache: dict[str, tuple[float, dict]] = {}

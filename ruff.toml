@@ -1,0 +1,10 @@
+# 自检配置:只报「会崩」和「肯定错」的,风格问题不管。
+# 用法:ruff check quantlab tools tests
+line-length = 110
+target-version = "py310"
+extend-exclude = ["build", "dist", "release", "_ref", "data", "reports", "logs"]
+
+[lint]
+select = ["E9", "F"]
+# F841 未使用局部变量:多是解包占位和调试残留,自动修复会删掉可能有副作用的赋值
+ignore = ["F841"]

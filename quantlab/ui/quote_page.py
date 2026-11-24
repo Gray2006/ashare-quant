@@ -5,10 +5,10 @@ from __future__ import annotations
 import time
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame, QHBoxLayout,
+from PySide6.QtWidgets import (QComboBox, QHBoxLayout,
                                QInputDialog, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QPushButton, QTabWidget,
-                               QTableWidget, QVBoxLayout, QWidget)
+                               QVBoxLayout, QWidget)
 
 from ..config import cfg
 from ..data import em, moneyflow, sector, sina
@@ -20,7 +20,7 @@ from ..utils import (SESSION_LABEL, board_of, fmt_amount, fmt_pct, fmt_price,
 from .charts import FlowPanel, KLineWidget, TrendWidget
 from .board import Board
 from .common import Card, label, pnl_color, set_cell, table
-from .theme import BORDER, BORDER2, DOWN, FLAT, LINE, TEXT, TEXT_DIM, TEXT_MUT, UP
+from .theme import DOWN, FLAT, LINE, TEXT_DIM, TEXT_MUT, UP
 
 
 class QuotePage(QWidget):

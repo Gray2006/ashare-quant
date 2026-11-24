@@ -354,7 +354,6 @@ class ReviewPage(QWidget):
             return
         day = days[row]["day"]
         from ..config import cfg
-        from ..engine import review
         c = cfg()
         hidden = list(c.get("review.hidden_days", []) or [])
         if day not in hidden:

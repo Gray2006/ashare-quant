@@ -7,20 +7,18 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from PySide6.QtCore import QDate, Qt, Signal
+from PySide6.QtCore import QDate, Signal
 from PySide6.QtWidgets import (QComboBox, QDateEdit, QDoubleSpinBox, QFileDialog,
                                QHBoxLayout, QLabel, QPlainTextEdit, QProgressBar,
-                               QPushButton, QSpinBox, QTabWidget, QTableWidget,
-                               QVBoxLayout, QWidget)
+                               QPushButton, QSpinBox, QTabWidget, QVBoxLayout, QWidget)
 
 from ..config import APP_DIR
 from ..engine import audit, backtest as bt, strategy as st_mod, universe
 from ..engine.hub import TaskRunner
-from ..utils import fmt_pct
 from .charts import EquityWidget
 from .board import Board
 from .common import Card, label, pnl_color, set_cell, table
-from .theme import BORDER, TEXT_DIM, UP, WARN
+from .theme import TEXT_DIM, UP, WARN
 
 POOLS = [("全市场", "all"), ("沪深300", "hs300"), ("中证500", "zz500"),
          ("中证1000", "zz1000"), ("上证50", "sz50"), ("成交额前列", "amount"),
@@ -547,6 +545,7 @@ class BacktestPage(QWidget):
                 else:
                     verdict, vc = "跑不赢等权", TEXT_DIM
                 set_cell(self.ic_tbl, i, 5, verdict, vc)
+            from ..engine import factor_analysis as fa
             red = d["rep"].get("redundant") or []
             tip = (f"{len(rows)} 个因子 · 池子 {d['n']} 只 · 未来 5 日 · 扣费 "
                    f"{fa.COST_ROUND_TRIP*100:.2f}%/次")

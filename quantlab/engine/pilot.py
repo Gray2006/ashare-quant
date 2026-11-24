@@ -21,7 +21,6 @@ from PySide6.QtCore import QThread, Signal
 
 from ..config import cfg
 from ..utils import parse_hhmm
-from ..data.store import store
 from .autotrader import AutoTrader
 from .hub import track
 

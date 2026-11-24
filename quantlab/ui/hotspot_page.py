@@ -11,7 +11,7 @@
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer, Signal, QUrl
+from PySide6.QtCore import QTimer, Signal, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QHBoxLayout, QPushButton, QVBoxLayout, QWidget)
 
@@ -19,7 +19,7 @@ from ..engine import hotspot
 from ..engine.hub import TaskRunner
 from .board import Board
 from .common import Card, StatCard, label, pnl_color, set_cell, table
-from .theme import ACCENT, TEXT, TEXT_DIM, TEXT_MUT, WARN
+from .theme import ACCENT, TEXT, TEXT_MUT, WARN
 
 YI = 1e8
 

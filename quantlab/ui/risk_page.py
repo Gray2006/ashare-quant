@@ -16,7 +16,7 @@ from ..engine import riskband as rb
 from ..engine.hub import TaskRunner
 from .board import Board
 from .common import Card, StatCard, set_cell, table
-from .theme import ACCENT, BG, BORDER, DOWN, FLAT, TEXT, TEXT_DIM, TEXT_MUT, UP, WARN
+from .theme import BG, DOWN, FLAT, TEXT, TEXT_DIM, TEXT_MUT, UP, WARN
 
 
 class BandBar(QWidget):
