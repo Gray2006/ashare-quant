@@ -40,6 +40,7 @@ from .limitup_page import LimitUpPage
 from .hotspot_page import HotspotPage
 from .company_page import CompanyPage
 from .company_eval_page import CompanyEvalPage
+from .factor_mine_page import FactorMinePage
 from .strategy_page import StrategyPage
 from .news_page import NewsPage
 from .alert_page import AlertPage
@@ -69,6 +70,7 @@ NAV_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
         ("选股", "screen", "条件筛选 · 主力资金榜 · 板块资金流"),
         ("技术分析", "ta", "缠论结构 · 道氏趋势 · 智能资金 · 背离 · 共振投票"),
         ("形态", "pattern", "K线形态识别 · 出现之后的实测涨跌频率"),
+        ("因子挖掘", "factor_mine", "模板迭代 / 遗传搜索 · IC/ICIR/样本外 · 组合回测"),
         ("策略广场", "strategy", "内置策略 · 自定义规则 · Pine Script 导入"),
         ("回测", "backtest", "策略回测 · 净值曲线 · 成绩单与批量对比"),
     ]),
@@ -172,6 +174,7 @@ class MainWindow(QMainWindow):
         "health": HealthPage, "settings": SettingsPage,
         "limitup": LimitUpPage, "hotspot": HotspotPage,
         "company": CompanyPage, "company_eval": CompanyEvalPage,
+        "factor_mine": FactorMinePage,
         "trade": TradePage, "review": ReviewPage, "learn": LearnPage,
     }
     # 要网关实例的页
@@ -194,6 +197,7 @@ class MainWindow(QMainWindow):
             feedback.start()
         except Exception:
             pass
+        QTimer.singleShot(20000, self._auto_factor_mine)
 
         self._clock = QTimer(self)
         self._clock.timeout.connect(self._tick)
@@ -347,6 +351,19 @@ class MainWindow(QMainWindow):
         else:
             bar.setToolTip("")
         bar.showMessage(text, timeout)
+
+    def _auto_factor_mine(self) -> None:
+        """每天首次启动后台跑一轮因子挖掘(公开版只跑 A 股)。"""
+        import threading
+
+        def work():
+            try:
+                from ..engine import factor_mine
+                factor_mine.run_daily()
+            except Exception:
+                pass
+
+        threading.Thread(target=work, name="factor-auto", daemon=True).start()
 
     def _wire_page(self, key: str, page) -> None:
         """页面信号接到主窗口。只有真造出来的页面才接线。"""

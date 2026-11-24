@@ -31,3 +31,7 @@ dist/
 Thumbs.db
 desktop.ini
 *.log
+
+# 因子挖掘的每日结果(本机生成)
+/factor_mine/
+/factor_library.json
