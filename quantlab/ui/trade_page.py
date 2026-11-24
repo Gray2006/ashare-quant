@@ -15,7 +15,7 @@ from ..engine.hub import TaskRunner
 from ..engine.models import SIDE_BUY, SIDE_SELL
 from ..utils import fmt_amount, fmt_price, normalize_code
 from .board import Board
-from .common import Card, label, pnl_color, set_cell, table
+from .common import Card, label, pnl_color, set_cell, table, watch_codes
 from .theme import BORDER, DOWN, FLAT, TEXT, TEXT_DIM, UP, WARN
 
 
@@ -104,7 +104,7 @@ class TradePage(QWidget):
         obar.addWidget(self.btn_cancel)
         order_card.body().addLayout(obar)
         self.ord_tbl = table(["时间", "代码", "方向", "价格", "数量", "状态", "说明"],
-                             widths=[70, 66, 50, 68, 60, 72, 260], stretch_col=6)
+                             widths=[112, 68, 52, 76, 64, 76, 240], stretch_col=6)
         order_card.add(self.ord_tbl, 1)
         left.add(order_card, 2, 0, min_h=130)
 
@@ -119,7 +119,9 @@ class TradePage(QWidget):
         self.code = QComboBox()
         self.code.setEditable(True)
         self.code.setInsertPolicy(QComboBox.NoInsert)
-        self.code.lineEdit().setPlaceholderText("输入代码,回车查价")
+        self.code.lineEdit().setPlaceholderText("自选或输入代码,回车查价")
+        for _c in watch_codes(40):
+            self.code.addItem(_c, _c)
         self.code.lineEdit().returnPressed.connect(self.lookup)
         form.addLayout(self._row("股票", self.code))
 
@@ -166,16 +168,20 @@ class TradePage(QWidget):
         gw_card = Card("交易通道")
         self.gw_combo = QComboBox()
         self.gw_combo.addItem("模拟盘(本地撮合)", "sim")
+        self.gw_combo.addItem("同花顺(界面自动下单)", "ths")
         self.gw_combo.currentIndexChanged.connect(lambda *_: self._on_gw_changed())
         gw_card.add(self.gw_combo)
+        self.dry_run = QPushButton("")
+        self.dry_run.clicked.connect(self._toggle_dry)
+        gw_card.add(self.dry_run)
         self.btn_connect = QPushButton("连接/刷新")
         self.btn_connect.clicked.connect(self.reconnect)
         gw_card.add(self.btn_connect)
         self.btn_reset = QPushButton("重置模拟盘")
         self.btn_reset.clicked.connect(self._reset_sim)
         gw_card.add(self.btn_reset)
-        gw_info = QLabel("模拟盘按 T+1、整手、佣金印花税与滑点撮合,数据落在本机 SQLite。"
-                         "这里只做练习与复盘,不接券商、不发真单。")
+        gw_info = QLabel("同花顺网关:先跑 tools/probe_ths.py 校准控件,"
+                         "并把 broker.ths.dry_run 保持 true 试跑。")
         gw_info.setWordWrap(True)
         gw_info.setStyleSheet(f"color:{TEXT_DIM};font-size:11px;")
         gw_card.add(gw_info)
@@ -217,15 +223,36 @@ class TradePage(QWidget):
         self.refresh_gw_state()
 
     def refresh_gw_state(self) -> None:
-        # 只剩模拟盘一个通道,这里保留钩子给以后的网关用
-        self.gw_combo.setEnabled(True)
+        is_ths = self.gw_combo.currentData() == "ths"
+        self.dry_run.setVisible(is_ths)
+        if is_ths:
+            dry = bool(self.cfg.get("broker.ths.dry_run", True))
+            self.dry_run.setText(f"演练模式(dry_run):{'开' if dry else '关 —— 会真下单!'}")
+            self.dry_run.setObjectName("Primary" if dry else "Danger")
+            self.dry_run.setStyleSheet("")
+            self.dry_run.setToolTip("点击切换。关闭后确认键会真的发到同花顺。")
+
+    def _toggle_dry(self) -> None:
+        if self.gw_combo.currentData() != "ths":
+            return
+        cur = bool(self.cfg.get("broker.ths.dry_run", True))
+        if cur:
+            ret = QMessageBox.warning(
+                self, "关闭演练模式",
+                "关闭后点击「买入/卖出」会真的在同花顺里提交委托。\n确定要关闭吗?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if ret != QMessageBox.Yes:
+                return
+        self.cfg.set("broker.ths.dry_run", not cur, save=True)
+        self.refresh_gw_state()
 
     def reconnect(self) -> None:
         kind = self.gw_combo.currentData()
         from ..broker.sim import SimGateway
+        from ..broker.ths import THSGateway
 
         def job():
-            gw = SimGateway()
+            gw = SimGateway() if kind == "sim" else THSGateway()
             ok, msg = gw.connect()
             return gw, ok, msg
 
@@ -351,6 +378,8 @@ class TradePage(QWidget):
         from ..data.store import store
         acct = getattr(self.gw, "account_name", None) if self.gw else None
         rows = store().orders(60, account=acct if self.gw and self.gw.name == "sim" else None)
+        # 加密订单在「加密」页单独展示,这里只留 A 股/同花顺的单子
+        rows = [r for r in rows if (r.get("gateway") or "sim") != "okx"]
         self._ord_ids = [int(r["id"]) for r in rows]
         self.ord_tbl.setRowCount(len(rows))
         for i, r in enumerate(rows):
@@ -531,6 +560,17 @@ class TradePage(QWidget):
             return
 
         name = (q or {}).get("name", "")
+        amt = price * qty
+        if self.gw.is_live and not bool(self.cfg.get("broker.ths.dry_run", True)):
+            ret = QMessageBox.warning(
+                self, "确认下单",
+                f"通道:{self.gw.display_name}\n"
+                f"{'买入' if side == SIDE_BUY else '卖出'} {code} {name}\n"
+                f"价格 {price:.2f} × {qty} 股 ≈ {amt:,.0f} 元\n\n"
+                f"这会真的提交到同花顺,确认吗?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if ret != QMessageBox.Yes:
+                return
 
         def job():
             return self.gw.place_order(code, side, price, qty, name)

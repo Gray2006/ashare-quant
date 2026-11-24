@@ -231,7 +231,9 @@ class ReviewPage(QWidget):
         if not rep.get("ok"):
             # 没有成交记录时也别留一张空表:六项纪律是「以后要守的规矩」,
             # 空着会让人以为页面坏了。表格照填,只把成绩单那几块置空。
-            self.sub.setText(rep.get("empty") or "")
+            # 副标题只在和主结论不同的时候才显示,否则同一句话会印两遍。
+            empty = (rep.get("empty") or "").strip()
+            self.sub.setText("" if empty == self.verdict.text().strip() else empty)
             self.raw.setPlainText(review.to_text(rep))
             chk = rep.get("checks") or []
             self.chk_tbl.setRowCount(len(chk))

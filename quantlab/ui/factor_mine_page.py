@@ -249,7 +249,7 @@ class _MarketPanel(QWidget):
 
         left = Card("候选因子", hint="按样本外表现排序 · 多选后回测")
         self.tbl = table(["因子", "训练IC", "测试IC", "稳定性", "覆盖", "多空", "风险"],
-                         widths=[250, 62, 62, 56, 50, 58, 44], stretch_col=0)
+                         widths=[250, 62, 62, 62, 50, 76, 44], stretch_col=0)
         self.tbl.setSelectionMode(self.tbl.SelectionMode.ExtendedSelection)
         self.tbl.itemSelectionChanged.connect(self._on_pick)
         self.tbl.doubleClicked.connect(lambda _i: self.backtest())
@@ -563,9 +563,11 @@ class FactorMinePage(QWidget):
 
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
-        self.panels = {"a": _MarketPanel("a", "A股", self)}
-        self.panels["a"].status.connect(self.status)
-        self.tabs.addTab(self.panels["a"], "A股")
+        self.panels = {"a": _MarketPanel("a", "A股", self),
+                       "crypto": _MarketPanel("crypto", "加密", self)}
+        for key, title in (("a", "A股"), ("crypto", "加密")):
+            self.panels[key].status.connect(self.status)
+            self.tabs.addTab(self.panels[key], title)
         root.addWidget(self.tabs, 1)
         self.refresh_auto()
 
@@ -574,20 +576,24 @@ class FactorMinePage(QWidget):
         self.refresh_auto()
 
     def refresh_auto(self):
-        doc = factor_mine.load_result("a")
-        if not doc:
-            self.auto_lbl.setText("自动挖掘 · A股: 未跑")
-            return
-        res = doc.get("result") or {}
-        sel = len(res.get("selected") or [])
-        self.auto_lbl.setText(f"自动挖掘 · A股 {doc.get('saved', '')} · "
-                              f"{len(res.get('rows') or [])} 候选 / {sel} 入选")
-        self.panels["a"].load_saved()
+        marks = []
+        for key, name in (("a", "A股"), ("crypto", "加密")):
+            doc = factor_mine.load_result(key)
+            if not doc:
+                marks.append(f"{name}: 未跑")
+                continue
+            res = doc.get("result") or {}
+            sel = len(res.get("selected") or [])
+            marks.append(f"{name} {doc.get('saved', '')} · "
+                         f"{len(res.get('rows') or [])} 候选 / {sel} 入选")
+            self.panels[key].load_saved()
+        self.auto_lbl.setText("自动挖掘 · " + "   |   ".join(marks))
 
     def run_all(self):
-        panel = self.panels["a"]
-        if not panel._tasks:
-            panel.run()
+        for key in ("a", "crypto"):
+            panel = self.panels[key]
+            if not panel._tasks:
+                panel.run()
 
     def stop(self):
         for p in self.panels.values():

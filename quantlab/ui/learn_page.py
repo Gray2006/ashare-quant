@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import (QHBoxLayout, QLabel, QPlainTextEdit, QPushButton,
+from PySide6.QtWidgets import (QHBoxLayout, QLabel, QPushButton, QTextBrowser,
                                QVBoxLayout, QWidget)
 
 from ..config import cfg
@@ -70,8 +70,10 @@ class LearnPage(QWidget):
 
         mid = Board("learn.mid", cols=[0.56, 0.44], rows=[1.0])
         rep = Card("今日日报")
-        self.report = QPlainTextEdit()
-        self.report.setReadOnly(True)
+        # 日报是 markdown,用 QTextBrowser 渲染;QPlainTextEdit 会把 # 和 | 原样吐出来
+        self.report = QTextBrowser()
+        self.report.setOpenExternalLinks(False)
+        self.report.setStyleSheet("QTextBrowser{background:transparent;border:none;}")
         rep.add(self.report, 1)
         mid.add(rep, 0, 0, min_w=420, min_h=220)
 
@@ -110,7 +112,7 @@ class LearnPage(QWidget):
 
         pr = Card("最近预测")
         self.pr_tbl = table(["日期", "代码", "方向", "置信", "结果"],
-                            widths=[86, 76, 56, 60, 90], stretch_col=4)
+                            widths=[104, 76, 56, 60, 90], stretch_col=4)
         pr.add(self.pr_tbl, 1)
         bot.add(pr, 0, 1, min_w=380, min_h=140)
         board.add(bot, 2, 0, min_h=140)
@@ -120,6 +122,13 @@ class LearnPage(QWidget):
         c = cfg()
         return (str(c.get("autotrade.account", "default") or "default"),
                 str(c.get("autotrade.strategy", "") or ""))
+
+    def _set_md(self, text: str) -> None:
+        """markdown 渲染;Qt 版本不支持时退回纯文本,不让页面空白。"""
+        try:
+            self.report.document().setMarkdown(text)
+        except Exception:  # noqa: BLE001
+            self.report.setPlainText(text)
 
     def refresh(self) -> None:
         self.btn.setEnabled(False)
@@ -152,7 +161,7 @@ class LearnPage(QWidget):
 
         def err(e):
             self.btn.setEnabled(True)
-            self.report.setPlainText(f"读取失败:{e}")
+            self._set_md(f"读取失败:{e}")
 
         r = TaskRunner(job)
         r.succeeded.connect(ok)
@@ -192,7 +201,7 @@ class LearnPage(QWidget):
                            hint=f"{filled}/{total_dec} 条")
 
         hot = d.get("hot") or []
-        top_hot = [h for h in hot if h.get("win5", 0) >= 0.55][:8]
+        top_hot = [h for h in hot if h.get("n", 0) >= 3][:8]
         self.hot_tbl.setRowCount(len(top_hot))
         for i, h in enumerate(top_hot):
             set_cell(self.hot_tbl, i, 0, h["seat"], TEXT_DIM, align="left")
@@ -201,10 +210,10 @@ class LearnPage(QWidget):
                      UP if h["avg5"] > 0 else DOWN)
             set_cell(self.hot_tbl, i, 3, f"{h['win5']:.0%}")
         self.hot_msg.setText(
-            f"{len(top_hot)} 个高胜率席位" if top_hot
-            else "暂无游资数据,去龙虎榜页点「采集」")
+            f"{len(top_hot)} 个席位 · 胜率已平滑,去龙虎榜页看今日名单" if top_hot
+            else "暂无游资数据,去龙虎榜页点「同步」")
 
-        self.report.setPlainText(sl.render_markdown(rep))
+        self._set_md(sl.render_markdown(rep))
 
         tune = d["tune"]
         base = d["base"]
@@ -269,7 +278,7 @@ class LearnPage(QWidget):
             rep = sl.daily_report(acc, strat)
             md, js = sl.save_report(rep)
             self.status.emit(f"日报已写:{md}")
-            self.report.setPlainText(sl.render_markdown(rep))
+            self._set_md(sl.render_markdown(rep))
         except Exception as e:  # noqa: BLE001
             self.status.emit(f"写日报失败:{e}")
 

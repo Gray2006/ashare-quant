@@ -30,6 +30,31 @@ POOLS = [("全市场", "all"), ("沪深300", "hs300"), ("中证500", "zz500"),
          ("自选股", "watchlist")]
 
 
+def _fmt_log_reason(raw: str) -> str:
+    """执行日志里存的是整包 JSON,直接显示是一坨花括号。这里翻成人话。"""
+    import json
+    try:
+        d = json.loads(raw)
+    except Exception:  # noqa: BLE001
+        return raw[:160]
+    if not isinstance(d, dict):
+        return raw[:160]
+    parts: list[str] = []
+    if d.get("message"):
+        parts.append(str(d["message"])[:36])
+    n_sell = len(d.get("sells") or [])
+    n_buy = len(d.get("buys") or [])
+    if n_sell or n_buy:
+        parts.append(f"卖 {n_sell} 买 {n_buy}")
+    sk = d.get("skipped") or []
+    if sk:
+        first = sk[0] if isinstance(sk[0], dict) else {}
+        parts.append(f"跳过 {len(sk)}({str(first.get('reason') or '')[:22]})")
+    if d.get("dry_run"):
+        parts.append("演练")
+    return " · ".join(parts) or raw[:160]
+
+
 class RuleDialog(QDialog):
     """新建/编辑一条自定义规则策略。"""
 
@@ -270,7 +295,7 @@ class AutoPage(QWidget):
         self.sl_on.setToolTip("分批建仓/减仓,记住每次决策,按历史表现调参数。\n"
                               "关闭时行为与原来完全一致(一次性按目标仓位下单)")
         # 成本摊薄(做T):不是独立策略,只是持仓上顺手压成本
-        self.cost_avg = QCheckBox("成本摊薄")
+        self.cost_avg = QCheckBox("启用")
         self.cost_avg.setToolTip(
             "对已有底仓的票做价差,赚到的差价等于把持仓成本压下来。\n"
             "不规定先买还是先卖:浮盈到阈值先卖、回落买回;浮亏到阈值先买、反弹卖出。\n"
@@ -1038,7 +1063,7 @@ class AutoPage(QWidget):
             set_cell(self.log_tbl, i, 0, ts, align="left")
             set_cell(self.log_tbl, i, 1, str(r.get("name") or ""), align="left")
             reason = str(r.get("reason") or "")
-            set_cell(self.log_tbl, i, 2, reason[:160], align="left")
+            set_cell(self.log_tbl, i, 2, _fmt_log_reason(reason), align="left")
 
     # ------------------------------------------------------------ 规则
     def load_rules_list(self) -> None:
