@@ -47,6 +47,7 @@ from .alert_page import AlertPage
 from .trade_page import TradePage
 from .review_page import ReviewPage
 from .learn_page import LearnPage
+from .auto_page import AutoPage
 from .theme import (ACCENT, BG4, BORDER, DOWN, FLAT, QSS, TEXT, TEXT_DIM,
                     TEXT_MUT, UP, apply_app_palette)
 from .world_page import WorldPage
@@ -82,6 +83,7 @@ NAV_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
     ]),
     ("交易", [
         ("模拟盘", "trade", "多账户模拟下单 · 持仓与委托 · T+1 与费用按回测口径"),
+        ("自动交易", "auto", "定时跑策略调仓 · 只走模拟盘 · 回撤闸与动态仓位"),
         ("复盘", "review", "已实现盈亏 · 纪律检查 · 按标的与按日归因"),
         ("学习", "learn", "自适应参数 · 今日日报 · 预测准确率"),
     ]),
@@ -176,9 +178,10 @@ class MainWindow(QMainWindow):
         "company": CompanyPage, "company_eval": CompanyEvalPage,
         "factor_mine": FactorMinePage,
         "trade": TradePage, "review": ReviewPage, "learn": LearnPage,
+        "auto": AutoPage,
     }
     # 要网关实例的页
-    _NEED_GW = ("trade", "review")
+    _NEED_GW = ("trade", "review", "auto")
     # 启动就要在的页:首页 + 后台常驻的预警轮询 + 设置
     _EAGER = ("quote", "settings", "alert")
 
