@@ -88,9 +88,12 @@ class SettingsPage(QWidget):
         fb_row = QHBoxLayout()
         btn_flush = QPushButton("立即上传")
         btn_flush.clicked.connect(self._flush_feedback)
+        btn_test = QPushButton("测试连接")
+        btn_test.clicked.connect(self._test_feedback)
         btn_what = QPushButton("会发什么?")
         btn_what.clicked.connect(self._explain_feedback)
         fb_row.addWidget(btn_flush)
+        fb_row.addWidget(btn_test)
         fb_row.addWidget(btn_what)
         fb_row.addStretch(1)
         self.fb_queue = QLabel("")
@@ -184,6 +187,15 @@ class SettingsPage(QWidget):
             self.fb_on.blockSignals(False)
             return
         self.cfg.set("feedback.consent", True, save=True)
+
+    def _test_feedback(self) -> None:
+        try:
+            from .. import cloud
+            self._save_feedback()
+            r = cloud.health()
+            self.hint.setText(f"连接正常:{str(r)[:120]}")
+        except Exception as e:  # noqa: BLE001
+            self.hint.setText(f"连接失败:{str(e)[:120]}")
 
     def _explain_feedback(self) -> None:
         QMessageBox.information(

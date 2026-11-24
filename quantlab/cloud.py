@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import os
 from urllib.parse import urlparse
 
 import requests
@@ -26,9 +27,12 @@ class CloudError(RuntimeError):
 
 def _conf() -> dict:
     c = cfg().get("cloud") or {}
+    # 环境变量优先:方便打包/自建服务时不改 config.json
+    url = str(os.environ.get("GRAY_CLOUD_URL") or c.get("base_url") or "")
+    key = str(os.environ.get("GRAY_CLOUD_KEY") or c.get("key") or "")
     return {
-        "base_url": str(c.get("base_url") or "").rstrip("/"),
-        "key": str(c.get("key") or ""),
+        "base_url": url.rstrip("/"),
+        "key": key,
         "enabled": bool(c.get("enabled")),
         "timeout": float(c.get("timeout") or TIMEOUT),
     }
