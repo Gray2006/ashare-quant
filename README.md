@@ -4,6 +4,19 @@
 
 **不含**：券商/同花顺下单、自动交易、加密货币、任何投资建议。数据回流默认关闭，开启后只上传脱敏后的回测/决策样本（见下文）。
 
+## 一键安装（Windows，推荐）
+
+1. 下载仓库 ZIP，解压到一个**普通目录**（不要放 `C:\Program Files`，那里没写权限）
+2. 双击 `install.bat`
+3. 等 1~3 分钟（第一次要下载 PySide6 等依赖）
+4. 桌面出现「量化工作台」，双击就能用
+
+要求：Windows 10/11，已装 Python 3.10+（安装时勾选 “Add python.exe to PATH”）。
+不需要管理员权限；装完 `config.json`、`data/` 都在解压目录里，卸载或换机直接拷走。
+
+- 启动：`start.bat`，或桌面快捷方式；想看报错用 `start.bat --console`
+- 卸载：`uninstall.bat`（只删 `.venv` 和快捷方式，配置/缓存/待上传样本都保留）
+
 ## 功能
 
 | 页面 | 做什么 |
@@ -31,15 +44,14 @@
 | 数据健康 | 数据源状态、熔断明细、各领域数据新鲜度 |
 | 设置 | 刷新间隔、数据目录、离线模式、数据回流开关与服务端地址 |
 
-## 安装运行
-
-Windows，Python 3.10+（推荐 3.11/3.12）。
+## 手动安装（开发者）
 
 ```bat
 git clone https://github.com/Gray2006/ashare-quant.git
 cd ashare-quant
-pip install -r requirements.txt
-python run.py
+python -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+.venv\Scripts\python run.py
 ```
 
 首次运行生成：
