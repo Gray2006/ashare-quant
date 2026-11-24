@@ -36,6 +36,10 @@ from .settings_page import SettingsPage
 from .ta_page import TAPage
 from .grid_page import GridPage
 from .lhb_page import LhbPage
+from .limitup_page import LimitUpPage
+from .hotspot_page import HotspotPage
+from .company_page import CompanyPage
+from .company_eval_page import CompanyEvalPage
 from .strategy_page import StrategyPage
 from .news_page import NewsPage
 from .alert_page import AlertPage
@@ -50,11 +54,15 @@ NAV_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
         ("多图", "grid", "四图并排 · 十字线联动 · 同周期下标严格可比"),
         ("板块", "sector", "行业 / 概念 / 地域资金流 · 板块分时与成分股"),
         ("龙虎榜", "lhb", "每日上榜个股 · 买卖席位明细 · 净买入排序"),
+        ("涨停", "limitup", "当日涨停池 · 连板梯队 · 炸板/跌停与情绪分析"),
+        ("市场热点", "hotspot", "情绪 · 概念/行业涨幅榜 · 强势个股 · 热点快讯"),
         ("全球市场", "world", "美股港股商品汇率 · 国际新闻时政"),
         ("资讯", "news", "财经资讯与政策 · 分类过滤 · 双击看原文"),
         ("预警", "alert", "价格/涨跌幅条件预警 · 命中留痕"),
     ]),
     ("研究", [
+        ("公司分析", "company", "F10 资料 · 主营构成 · 财务趋势 · 估值同业 · 股东事件"),
+        ("公司评估", "company_eval", "财务 / 资金流 / 舆论 / 产品 / 风险,规则打分报告"),
         ("选股", "screen", "条件筛选 · 主力资金榜 · 板块资金流"),
         ("技术分析", "ta", "缠论结构 · 道氏趋势 · 智能资金 · 背离 · 共振投票"),
         ("形态", "pattern", "K线形态识别 · 出现之后的实测涨跌频率"),
@@ -154,6 +162,8 @@ class MainWindow(QMainWindow):
         "world": WorldPage, "news": NewsPage,
         "alert": AlertPage,
         "health": HealthPage, "settings": SettingsPage,
+        "limitup": LimitUpPage, "hotspot": HotspotPage,
+        "company": CompanyPage, "company_eval": CompanyEvalPage,
     }
     # 要网关实例的页(公开版没有交易,留空)
     _NEED_GW = ()
@@ -765,6 +775,13 @@ class MainWindow(QMainWindow):
             return
         self._go(self.page_map["quote"])
         self.quote_page.select_code(code)
+
+    def _goto_eval(self, code: str) -> None:
+        """公司分析页点「评估报告」→ 公司评估页带着代码生成。"""
+        if not code:
+            return
+        self._go(self.page_map["company_eval"])
+        self.company_eval_page.set_code(code)
 
     def _goto_sector(self, name: str) -> None:
         """行情页双击所属板块 → 板块页定位到它。"""

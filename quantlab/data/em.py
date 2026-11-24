@@ -393,7 +393,7 @@ def sector_moneyflow(top: int = 30) -> list[dict]:
 def company_profile(code: str) -> dict:
     """公司概况 + 主营构成概要。"""
     c = normalize_code(code)
-    prefix = ("SH" if c.startswith(("6", "9")) else "SZ") + c
+    prefix = "".join(_sec_suffix(c)[:1]) + c
     url = "https://emweb.securities.eastmoney.com/PC_HSF10/CompanySurvey/PageAjax"
     js = http.get_json(url, params={"code": prefix},
                        headers={"Referer": "https://emweb.securities.eastmoney.com/"})
@@ -428,11 +428,11 @@ def company_profile(code: str) -> dict:
 def finance_summary(code: str) -> list[dict]:
     """主要财务指标(按报告期倒序,取最近 16 期)。数据来自东财 datacenter F10。"""
     c = normalize_code(code)
-    suffix = "SH" if c.startswith(("6", "9")) else "SZ"
+    suffix = _sec_suffix(c)[1]
     url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
     params = {
         "reportName": "RPT_F10_FINANCE_MAINFINADATA", "columns": "ALL",
-        "filter": f'(SECUCODE="{c}.{suffix}")',
+        "filter": f'(SECUCODE="{suffix}")',
         "pageNumber": "1", "pageSize": "16",
         "sortColumns": "REPORT_DATE", "sortTypes": "-1",
         "source": "HSF10", "client": "PC",
@@ -458,6 +458,208 @@ def finance_summary(code: str) -> list[dict]:
             "net_margin": safe_float(r.get("XSJLL")),
             "debt_ratio": safe_float(r.get("ZCFZL")),
             "cash_flow_ps": safe_float(r.get("MGJYXJJE")),
+            # 盈利质量 / 偿债 / 规模:公司评估页要用,行情页财务表忽略这些键即可
+            "current_ratio": safe_float(r.get("LD")),          # 流动比率
+            "quick_ratio": safe_float(r.get("SD")),            # 速动比率
+            "cash_ratio": safe_float(r.get("CASH_RATIO")),     # 现金比率
+            "ocf_to_profit": safe_float(r.get("NCO_NETPROFIT")),  # 经营现金流/净利
+            "ocf_to_revenue": safe_float(r.get("NCO_OP")),     # 经营现金流/营收
+            "ocf": safe_float(r.get("NETCASH_OPERATE_PK")),    # 经营现金流净额
+            "roic": safe_float(r.get("ROIC")),
+            "total_assets": safe_float(r.get("TOTAL_ASSETS_PK")),
+            "total_equity": safe_float(r.get("TOTAL_EQUITY_PK")),
+            "liability": safe_float(r.get("LIABILITY")),
+            "interest_debt_ratio": safe_float(r.get("INTEREST_DEBT_RATIO")),  # 有息负债率
+            "rd_expense": safe_float(r.get("RDEXPEND")),       # 研发费用(部分公司缺)
+            "total_share": safe_float(r.get("TOTAL_SHARE")),
+            "revenue_qoq": safe_float(r.get("YYZSRGDHBZC")),   # 营收环比
+            "profit_qoq": safe_float(r.get("NETPROFITRPHBZC")),  # 净利环比
+            "gross_margin_change": safe_float(r.get("XSMLL_TB")),  # 毛利率同比变动
+        })
+    return out
+
+
+# ---------------------------------------------------------------- 公司分析(主营/股东/估值)
+
+F10_HEADERS = {"Referer": "https://emweb.securities.eastmoney.com/"}
+DATACENTER = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+
+
+def _sec_suffix(code: str) -> tuple[str, str]:
+    """代码 → (SH/SZ/BJ, 600519.SH 这种 SECUCODE 后缀)。北交所别当深市。
+
+    北交所:43/83/87 开头(老三板平移)与 920 开头(新代码);900 是沪 B,仍归 SH。
+    """
+    c = normalize_code(code)
+    if c.startswith(("4", "8", "920")):
+        mkt = "BJ"
+    elif c.startswith(("6", "9", "5")):
+        mkt = "SH"
+    else:
+        mkt = "SZ"
+    return mkt, f"{c}.{mkt}"
+
+
+def _datacenter(report: str, filt: str, size: int = 20,
+                sort: str = "REPORT_DATE") -> list[dict]:
+    js = http.get_json(DATACENTER, params={
+        "reportName": report, "columns": "ALL", "filter": filt,
+        "pageNumber": "1", "pageSize": str(size), "sortColumns": sort,
+        "sortTypes": "-1", "source": "HSF10", "client": "PC",
+    }, headers=F10_HEADERS, retries=2, timeout=10.0)
+    return (((js or {}).get("result") or {}).get("data")) or []
+
+
+def business_mix(code: str, period: str = "") -> dict:
+    """主营构成(按报告期)+ 经营范围/经营评述。
+
+    返回 {"period","periods":[...],"by_period":{期:groups},"groups","scope","review"}。
+    `groups` / `period` 是最新一期(兼容旧调用);页面切期次用 `by_period`。
+    MAINOP_TYPE: 1 行业、2 产品、3 地区。占比是接口给的小数(0.9996 = 99.96%),
+    毛利率只有「按行业」那组常有。
+    """
+    prefix = "".join(_sec_suffix(code)[:1]) + normalize_code(code)
+    js = http.get_json(
+        "https://emweb.securities.eastmoney.com/PC_HSF10/BusinessAnalysis/PageAjax",
+        params={"code": prefix}, headers=F10_HEADERS, retries=2, timeout=10.0)
+    rows = (js or {}).get("zygcfx") or []
+    if not rows:
+        return {"period": "", "periods": [], "by_period": {}, "groups": [],
+                "scope": "", "review": ""}
+    labels = {"1": "行业", "2": "产品", "3": "地区"}
+
+    def _groups(day: str) -> list[dict]:
+        out = []
+        for t in ("1", "2", "3"):
+            items = [r for r in rows
+                     if str(r.get("REPORT_DATE") or "")[:10] == day
+                     and str(r.get("MAINOP_TYPE")) == t]
+            if not items:
+                continue
+            items.sort(key=lambda r: -(safe_float(r.get("MAIN_BUSINESS_INCOME")) or 0))
+            out.append({
+                "type": labels.get(t, t),
+                "rows": [{
+                    "name": r.get("ITEM_NAME") or "",
+                    "income": safe_float(r.get("MAIN_BUSINESS_INCOME")),
+                    "ratio": safe_float(r.get("MBI_RATIO")),
+                    "margin": safe_float(r.get("GROSS_RPOFIT_RATIO")),
+                } for r in items[:8]],
+            })
+        return out
+
+    periods = sorted({str(r.get("REPORT_DATE") or "")[:10] for r in rows},
+                     reverse=True)
+    by_period = {d: _groups(d) for d in periods[:8]}
+    pick = period if period in by_period else periods[0]
+    scope = (((js or {}).get("zyfw") or [{}])[0].get("BUSINESS_SCOPE")) or ""
+    review = (((js or {}).get("jyps") or [{}])[0].get("BUSINESS_REVIEW")) or ""
+    return {"period": pick, "periods": periods[:8], "by_period": by_period,
+            "groups": by_period.get(pick) or [],
+            "scope": scope, "review": review}
+
+
+def shareholder_detail(code: str) -> dict:
+    """股东结构:十大流通股东、股东户数、控股股东、机构持仓汇总。"""
+    prefix = "".join(_sec_suffix(code)[:1]) + normalize_code(code)
+    js = http.get_json(
+        "https://emweb.securities.eastmoney.com/PC_HSF10/ShareholderResearch/PageAjax",
+        params={"code": prefix}, headers=F10_HEADERS, retries=2, timeout=10.0)
+    js = js or {}
+    free = [{
+        "name": r.get("HOLDER_NAME") or "",
+        "ratio": safe_float(r.get("FREE_HOLDNUM_RATIO")),
+        "change": safe_float(r.get("HOLD_NUM_CHANGE")),
+        "change_ratio": safe_float(r.get("CHANGE_RATIO")),
+        "type": r.get("SHARES_TYPE") or "",
+    } for r in (js.get("sdltgd") or [])[:10]]
+    counts = [{
+        "date": str(r.get("END_DATE") or "")[:10],
+        "holders": safe_float(r.get("HOLDER_TOTAL_NUM")),
+        "change_pct": safe_float(r.get("TOTAL_NUM_RATIO")),
+        "focus": r.get("HOLD_FOCUS") or "",
+        "avg_shares": safe_float(r.get("AVG_FREE_SHARES")),
+    } for r in (js.get("gdrs") or [])[:6]]
+    ctrl = (js.get("sjkzr") or [{}])[0]
+    inst = [{
+        "date": str(r.get("REPORT_DATE") or "")[:10],
+        "org_num": safe_float(r.get("TOTAL_ORG_NUM")),
+        "ratio": safe_float(r.get("TOTAL_SHARES_RATIO")),
+    } for r in (js.get("jgcc") or [])[:3]]
+    unlocks = [{
+        "date": str(r.get("LIFT_DATE") or "")[:10],
+        "num": safe_float(r.get("LIFT_NUM")),
+        "ratio": safe_float(r.get("TOTAL_SHARES_RATIO")),
+        "type": r.get("LIFT_TYPE") or "",
+    } for r in (js.get("xsjj") or [])[:5]]
+    return {
+        "free_top10": free,
+        "holder_counts": counts,
+        "controller": (ctrl.get("HOLDER_NAME") or ""),
+        "controller_ratio": safe_float(ctrl.get("HOLD_RATIO")),
+        "institutions": inst,
+        "unlocks": unlocks,
+    }
+
+
+def valuation_snapshot(code: str) -> dict:
+    """估值快照(东财 datacenter 每日估值表,不依赖 push2)。
+
+    返回最新交易日收盘的 PE(TTM)/PE(静)/PB/PS、总市值/流通市值、所属二级行业。
+    没有该股记录时返回 {} —— 北交所/新股可能缺。
+    """
+    suff = _sec_suffix(code)[1]
+    rows = _datacenter("RPT_VALUEANALYSIS_DET",
+                       f'(SECUCODE="{suff}")', size=1, sort="TRADE_DATE")
+    if not rows:
+        return {}
+    r = rows[0]
+    return {
+        "date": str(r.get("TRADE_DATE") or "")[:10],
+        "board": r.get("BOARD_NAME") or "",
+        "price": safe_float(r.get("CLOSE_PRICE")),
+        "pct": safe_float(r.get("CHANGE_RATE")),
+        "pe_ttm": safe_float(r.get("PE_TTM")),
+        "pe_static": safe_float(r.get("PE_LAR")),
+        "pb": safe_float(r.get("PB_MRQ")),
+        "ps": safe_float(r.get("PS_TTM")),
+        "total_cap": safe_float(r.get("TOTAL_MARKET_CAP")),
+        "float_cap": safe_float(r.get("NOTLIMITED_MARKETCAP_A")),
+        "shares": safe_float(r.get("TOTAL_SHARES")),
+    }
+
+
+def industry_valuation(board: str, day: str, size: int = 200) -> list[dict]:
+    """同一二级行业、同一交易日的全部个股估值(同业对比用)。"""
+    rows = _datacenter("RPT_VALUEANALYSIS_DET",
+                       f'(BOARD_NAME="{board}")(TRADE_DATE=\'{day}\')',
+                       size=size, sort="TOTAL_MARKET_CAP")
+    return [{
+        "code": r.get("SECURITY_CODE") or "",
+        "name": r.get("SECURITY_NAME_ABBR") or "",
+        "pe_ttm": safe_float(r.get("PE_TTM")),
+        "pb": safe_float(r.get("PB_MRQ")),
+        "ps": safe_float(r.get("PS_TTM")),
+        "total_cap": safe_float(r.get("TOTAL_MARKET_CAP")),
+        "pct": safe_float(r.get("CHANGE_RATE")),
+    } for r in rows]
+
+
+def dividend_history(code: str, size: int = 8) -> list[dict]:
+    """分红方案(按公告日倒序)。每 10 股派息/送转与进度。"""
+    rows = _datacenter("RPT_SHAREBONUS_DET",
+                       f'(SECURITY_CODE="{normalize_code(code)}")',
+                       size=size, sort="NOTICE_DATE")
+    out = []
+    for r in rows:
+        out.append({
+            "notice": str(r.get("NOTICE_DATE") or "")[:10],
+            "report": str(r.get("REPORT_DATE") or "")[:10],
+            "plan": r.get("IMPL_PLAN_PROFILE") or "",
+            "cash_per10": safe_float(r.get("PRETAX_BONUS_RMB")),
+            "it_ratio": safe_float(r.get("BONUS_IT_RATIO")),
+            "progress": r.get("ASSIGN_PROGRESS") or "",
+            "ex_date": str(r.get("EX_DIVIDEND_DATE") or "")[:10],
         })
     return out
 
@@ -550,6 +752,104 @@ def _strip_tag(s: str | None) -> str:
         return ""
     import re
     return re.sub(r"<[^>]+>", "", s).strip()
+
+
+# ---------------------------------------------------------------- 涨停 / 炸板 / 跌停池
+
+PUSH2EX = "https://push2ex.eastmoney.com"
+_POOL_UT = "7eea3edcaed734bea9cbfc24409ed989"
+# kind → (接口, 排序, 需要的字段口径)
+POOL_KINDS = {
+    "zt": ("getTopicZTPool", "fbt:asc"),     # 涨停池(含连板数 lbc)
+    "zb": ("getTopicZBPool", "fbt:asc"),     # 炸板池(盘中触板未封住)
+    "dt": ("getTopicDTPool", "fund:asc"),    # 跌停池
+    "qs": ("getTopicQSPool", "zdp:desc"),    # 强势股池(未涨停但强势)
+}
+
+
+def _pool_time(v) -> str:
+    """东财 92501 → 09:25:01;空值返回空串,别显示 00:00:00。"""
+    try:
+        s = f"{int(v):06d}"
+    except (TypeError, ValueError):
+        return ""
+    return f"{s[0:2]}:{s[2:4]}:{s[4:6]}"
+
+
+def _pool_price(v) -> float | None:
+    """池接口价格单位是 0.001 元(27710 → 27.71)。"""
+    p = safe_float(v)
+    return None if p is None else round(p / 1000.0, 2)
+
+
+def zt_pool(day: str, kind: str = "zt", page_size: int = 500,
+            retries: int = 2) -> dict:
+    """某交易日涨停池 / 炸板池 / 跌停池。
+
+    day 必须是 YYYYMMDD,且是交易日 —— 接口不接受空日期,传周末/节假日返回空。
+    返回 {"day","kind","total","rows"};rows 已归一化成统一字段:
+    code/name/price/pct_chg/amount/float_cap/turnover/sector/boards/
+    first_time/last_time/break_count/fund/zt_price/amplitude/days。
+    连板数 boards 只有涨停池有,其它池为 None —— 不要拿 1 冒充。
+    """
+    kind = str(kind or "zt").lower()
+    if kind not in POOL_KINDS:
+        raise ValueError(f"未知的池类型:{kind}")
+    ep, sort = POOL_KINDS[kind]
+    url = f"{PUSH2EX}/{ep}"
+    rows: list[dict] = []
+    total = 0
+    page = 0
+    while page < 4:
+        params = {
+            "ut": _POOL_UT, "dpt": "wz.ztzt", "Pageindex": page,
+            "pagesize": int(page_size), "sort": sort, "date": str(day),
+            "fields": "c,m,n,p,ztp,zdp,amount,ltsz,tshare,hs,lbc,fbt,lbt,fund,"
+                      "zbc,zf,days,oc,hybk,zttj",
+        }
+        try:
+            js = http.get_json(url, params=params, headers=EM_HEADERS,
+                               retries=retries, timeout=10.0)
+        except Exception:
+            if rows:
+                break
+            raise
+        data = (js or {}).get("data") or {}
+        if not data:
+            break
+        total = int(safe_float(data.get("tc")) or 0)
+        batch = data.get("pool") or []
+        rows.extend(_row_to_pool(r, kind) for r in batch)
+        if len(rows) >= total or not batch:
+            break
+        page += 1
+    return {"day": str(day), "kind": kind, "total": total or len(rows),
+            "rows": rows}
+
+
+def _row_to_pool(d: dict, kind: str) -> dict:
+    """池接口一行 → 统一结构。缺失字段一律 None,不用 0 顶替。"""
+    zttj = d.get("zttj") or {}
+    boards = safe_float(d.get("lbc")) if kind == "zt" else None
+    return {
+        "code": normalize_code(d.get("c") or ""),
+        "name": d.get("n") or "",
+        "price": _pool_price(d.get("p")),
+        "pct_chg": safe_float(d.get("zdp")),
+        "amount": safe_float(d.get("amount")),
+        "float_cap": safe_float(d.get("ltsz")),
+        "turnover": safe_float(d.get("hs")),
+        "sector": d.get("hybk") or "",
+        "boards": int(boards) if boards is not None else None,
+        "first_time": _pool_time(d.get("fbt")),
+        "last_time": _pool_time(d.get("lbt")),
+        "break_count": int(safe_float(d.get("zbc")) or 0),
+        "fund": safe_float(d.get("fund")),
+        "zt_price": _pool_price(d.get("ztp")),
+        "amplitude": safe_float(d.get("zf")),
+        "days": int(safe_float(d.get("days") or zttj.get("days")) or 0),
+        "kind": kind,
+    }
 
 
 # ---------------------------------------------------------------- 沪深港通 / 其他

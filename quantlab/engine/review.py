@@ -47,7 +47,7 @@ def _genesis() -> dict[str, float]:
 def _alive(orders: list[dict], genesis: dict[str, float]) -> tuple[list[dict], int]:
     """剔掉账户重建之前的订单。返回 (留下的, 剔掉的条数)。
 
-    没有 genesis 记录的账户(比如 okx-demo)一律保留 —— 不知道生日就别乱删。
+    没有 genesis 记录的账户(比如演示账户)一律保留 —— 不知道生日就别乱删。
     """
     if not genesis:
         return orders, 0
