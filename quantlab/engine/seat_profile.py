@@ -209,6 +209,64 @@ def _industry_of(code: str) -> str:
 
 
 # ---------------------------------------------------------------- 画像
+def _pattern_of(x: dict) -> str:
+    """单次出手归类成「打法」。这是画像里唯一能让人看懂他在干什么的东西。
+
+    判据只用当日可观测的特征:涨没涨、几连板、在什么位置、放没放量。
+    顺序有讲究 —— 连板 > 首板 > 半路 > 大跌低吸 > 高位/低位,先命中先算。
+    """
+    lim = int(x.get("limit") or 0)
+    pct = x.get("pct")
+    pos = x.get("pos")
+    vol = x.get("vol") or 1.0
+    if lim >= 3:
+        return "高位接力(3板+)"
+    if lim == 2:
+        return "二板接力"
+    if lim == 1:
+        return "首板打板"
+    if pct is not None and pct >= 0.05:
+        return "半路追涨"
+    if pct is not None and pct <= -0.05:
+        return "大跌/跌停低吸"
+    if pct is not None and pct < 0:
+        return "回调低吸"
+    if pos is not None and pos >= 0.85:
+        return "高位横盘接货"
+    if pos is not None and pos <= 0.30:
+        return "低位潜伏"
+    if vol >= 2.0:
+        return "放量突破"
+    return "普通参与"
+
+
+def _pattern_summary(recs: list[dict]) -> list[dict]:
+    """把打法按出现次数排好,并给每类挑一个最近的例子。"""
+    buckets: dict[str, list[dict]] = {}
+    for x in recs:
+        buckets.setdefault(_pattern_of(x), []).append(x)
+    out = []
+    for name, items in sorted(buckets.items(), key=lambda kv: -len(kv[1])):
+        items.sort(key=lambda r: r["day"], reverse=True)
+        sample = items[0]
+        rets = [r["ret5"] for r in items if r["ret5"] is not None]
+        out.append({
+            "name": name,
+            "n": len(items),
+            "share": round(len(items) / len(recs), 3) if recs else 0.0,
+            "avg5": round(sum(rets) / len(rets), 4) if rets else None,
+            "win5": round(sum(1 for r in rets if r > 0) / len(rets), 3) if rets else None,
+            "sample": {
+                "day": sample["day"], "code": sample["code"],
+                "name": sample.get("name", ""), "pct": sample.get("pct"),
+                "limit": sample.get("limit") or 0, "pos": sample.get("pos"),
+                "vol": sample.get("vol"), "net": sample.get("net"),
+                "ret5": sample.get("ret5"),
+            },
+        })
+    return out
+
+
 def profile(seat: str, days: int = 60, side: str = "buy",
             enrich: bool = True) -> dict:
     """给一个席位做画像。本地数据为主,enrich=True 时补行业分布(联网,慢几秒)。
@@ -262,6 +320,10 @@ def profile(seat: str, days: int = 60, side: str = "buy",
     net_sum = sum(x["net"] for x in recs)
     buy_sum = sum(x["buy"] for x in recs if x["buy"] > 0)
     sell_sum = sum(x["sell"] for x in recs if x["sell"] > 0)
+
+    # ---- 手法:把每次出手归类,次数最多的就是主打法
+    patterns = _pattern_summary(recs)
+    main_pattern = patterns[0]["name"] if patterns else ""
 
     # ---- 风格判定
     limit_share = _share([x["limit"] >= 1 for x in recs])
@@ -405,6 +467,7 @@ def profile(seat: str, days: int = 60, side: str = "buy",
         "avg_net": round(net_sum / len(recs), 0),
         "buy_sell_ratio": round(buy_sum / sell_sum, 2) if sell_sum > 0 else None,
         "tags": tags, "verdict": verdict,
+        "patterns": patterns, "main_pattern": main_pattern,
         "limit_share": round(limit_share, 3),
         "streak_share": round(streak_share, 3),
         "up5_share": round(up5_share, 3),
@@ -444,6 +507,25 @@ def render_markdown(p: dict) -> str:
         "",
         f"**风格:{' / '.join(p['tags'])}**", "",
         f"**结论:{p['verdict']}**", "",
+    ]
+
+    # 手法:比他买在什么位置更直观 —— 每次出手归成哪一类、各占多少、效果如何
+    pats = p.get("patterns") or []
+    if pats:
+        lines += ["## 它的手法", "",
+                  f"主打法:**{pats[0]['name']}**({pats[0]['share']:.0%} 的出手)", "",
+                  "| 打法 | 次数 | 占比 | 5日均收益 | 胜率 | 最近一次 |",
+                  "|---|---|---|---|---|---|"]
+        for it in pats[:5]:
+            sm = it["sample"]
+            lines.append(
+                f"| {it['name']} | {it['n']} | {it['share']:.0%} | "
+                f"{'-' if it['avg5'] is None else '%+.2f%%' % (it['avg5'] * 100)} | "
+                f"{'-' if it['win5'] is None else '%.0f%%' % (it['win5'] * 100)} | "
+                f"{sm['day']} {sm['code']} {sm.get('name', '')[:6]} |")
+        lines.append("")
+
+    lines += [
         "## 买入时点长什么样", "",
         "| 特征 | 数值 | 读法 |", "|---|---|---|",
         f"| 涨停日买入占比 | {p['limit_share']:.0%} | 越高越是打板选手 |",

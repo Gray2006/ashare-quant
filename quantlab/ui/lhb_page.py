@@ -9,7 +9,7 @@
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QPushButton, QVBoxLayout,
                                QWidget)
 
@@ -35,6 +35,9 @@ class LhbPage(QWidget):
         self._tasks: list[TaskRunner] = []
         self._rows: list[dict] = []
         self._filling = False
+        # 弹窗要留引用:只 show() 不持有的话,Python 侧对象被回收,
+        # 窗口会一闪而过(表现为「点了没反应」)。
+        self._dlgs: list = []
         self._build()
         QTimer.singleShot(800, self.refresh)
         QTimer.singleShot(1400, self._load_hot)
@@ -307,6 +310,9 @@ class LhbPage(QWidget):
         from .hotfilter_dialog import HotFilterDialog
         dlg = HotFilterDialog(self)
         dlg.setAttribute(Qt.WA_DeleteOnClose, True)
+        self._dlgs.append(dlg)
+        dlg.finished.connect(lambda *_: self._dlgs.remove(dlg)
+                             if dlg in self._dlgs else None)
         dlg.show()
 
     def _open_seat(self):
@@ -320,6 +326,9 @@ class LhbPage(QWidget):
         from .seat_dialog import SeatDialog
         dlg = SeatDialog(seat, self)
         dlg.setAttribute(Qt.WA_DeleteOnClose, True)
+        self._dlgs.append(dlg)
+        dlg.finished.connect(lambda *_: self._dlgs.remove(dlg)
+                             if dlg in self._dlgs else None)
         dlg.show()
 
     def _render_hot(self, cov: dict, acc: dict, wf: dict, stats: list, preds: list):
