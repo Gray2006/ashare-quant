@@ -43,6 +43,9 @@ from .company_eval_page import CompanyEvalPage
 from .strategy_page import StrategyPage
 from .news_page import NewsPage
 from .alert_page import AlertPage
+from .trade_page import TradePage
+from .review_page import ReviewPage
+from .learn_page import LearnPage
 from .theme import (ACCENT, BG4, BORDER, DOWN, FLAT, QSS, TEXT, TEXT_DIM,
                     TEXT_MUT, UP, apply_app_palette)
 from .world_page import WorldPage
@@ -74,6 +77,11 @@ NAV_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
         ("走势预判", "forecast", "涨/平/跌概率 + 因子贡献 + 走查命中率"),
         ("涨幅预选", "pick", "全市场快扫 · 每日候选 + 参考幅度"),
         ("风险档位", "risk", "横截面波动档位 · 建议仓位上限 · 走查校验"),
+    ]),
+    ("交易", [
+        ("模拟盘", "trade", "多账户模拟下单 · 持仓与委托 · T+1 与费用按回测口径"),
+        ("复盘", "review", "已实现盈亏 · 纪律检查 · 按标的与按日归因"),
+        ("学习", "learn", "自适应参数 · 今日日报 · 预测准确率"),
     ]),
     ("管理", [
         ("数据健康", "health", "数据源状态 · 熔断明细 · 各领域数据新鲜度"),
@@ -164,9 +172,10 @@ class MainWindow(QMainWindow):
         "health": HealthPage, "settings": SettingsPage,
         "limitup": LimitUpPage, "hotspot": HotspotPage,
         "company": CompanyPage, "company_eval": CompanyEvalPage,
+        "trade": TradePage, "review": ReviewPage, "learn": LearnPage,
     }
-    # 要网关实例的页(公开版没有交易,留空)
-    _NEED_GW = ()
+    # 要网关实例的页
+    _NEED_GW = ("trade", "review")
     # 启动就要在的页:首页 + 后台常驻的预警轮询 + 设置
     _EAGER = ("quote", "settings", "alert")
 
@@ -174,6 +183,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         apply_app_palette()      # 占位符/禁用色:QSS 管不到,先铺调色板
         self.cfg = cfg()
+        # 模拟盘网关:交易/复盘两页共用同一个实例,账户切换才不会各走各的
+        from ..broker.sim import SimGateway
+        self.gw = SimGateway()
         self._build()
         self._apply_geometry()
         self._start_hub()
@@ -302,7 +314,7 @@ class MainWindow(QMainWindow):
         cls = self._BUILDERS.get(key)
         if cls is None:
             return None
-        page = cls()
+        page = cls(self.gw) if key in self._NEED_GW else cls()
         built[key] = page
         self._all_pages.append(page)
         self._wire_page(key, page)
@@ -348,6 +360,8 @@ class MainWindow(QMainWindow):
             page.open_eval.connect(self._goto_eval)
         elif key == "risk":
             page.goto_quote.connect(self._goto_stock)
+        elif key == "screen":
+            page.send_to_trade.connect(self._goto_trade)
         elif key == "settings":
             page.settings_changed.connect(self._apply_settings)
 
@@ -627,8 +641,14 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ 行情
     def _hub_codes(self) -> list[str]:
-        """行情订阅 = 自选股。"""
+        """行情订阅 = 自选股 + 模拟盘持仓(持仓不在自选里也要能算市值)。"""
         codes = list(self.quote_page.codes)
+        try:
+            gw = getattr(self, "gw", None)
+            if gw is not None:
+                codes += [p.code for p in gw.positions()]
+        except Exception:
+            pass
         seen: set[str] = set()
         out: list[str] = []
         for c in codes:
@@ -661,6 +681,10 @@ class MainWindow(QMainWindow):
         self._sub_timer.setInterval(5000)
         self._sub_timer.timeout.connect(self._sync_hub_codes)
         self._sub_timer.start()
+        # 学习调度:全天常驻,收盘后跑一次参数学习与预测回填
+        from ..engine.learn_scheduler import LearnScheduler
+        self._learn_sched = LearnScheduler(log=lambda m: self._status(m, 8000))
+        self._learn_sched.start()
 
     def _on_feed(self, st: dict) -> None:
         """状态栏右侧:数据源 + 本次往返 + p50。"""
@@ -688,6 +712,13 @@ class MainWindow(QMainWindow):
 
     def _on_quotes(self, data: dict) -> None:
         self.quote_page.update_quotes(data)
+        # 模拟盘持仓要靠行情重算市值与浮盈,页面没建就不用喂
+        trade = self._built.get("trade")
+        if trade is not None:
+            try:
+                trade.update_quotes(data)
+            except Exception:
+                pass
 
     def _on_indexes(self, rows: list) -> None:
         want = {"000001": 0, "399001": 1, "399006": 2, "000300": 3}
@@ -796,6 +827,22 @@ class MainWindow(QMainWindow):
             return
         self._go(self.page_map["sector"])
         self.sector_page.focus_board(name)
+
+    def _goto_trade(self, rows: list) -> None:
+        """选股页点「去下单」→ 模拟盘页带代码、名称与价格。"""
+        self._go(self.page_map["trade"])
+        if not rows:
+            return
+        r = rows[0]
+        page = self._ensure_page("trade")
+        if page is None:
+            return
+        page.code.setCurrentText(str(r.get("code") or ""))
+        if r.get("name"):
+            page.name_label.setText(str(r["name"]))
+        if r.get("price"):
+            page.price.setValue(float(r["price"]))
+        page.lookup()
 
     def _apply_settings(self) -> None:
         interval = float(self.cfg.get("refresh_seconds.quote", 1))
