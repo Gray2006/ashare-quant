@@ -11,6 +11,44 @@ from PySide6.QtWidgets import (QFrame, QHBoxLayout, QHeaderView, QLabel,
 from .theme import ACCENT, BORDER, DOWN, FLAT, TEXT, TEXT_DIM, TEXT_MUT, UP
 
 
+def watch_codes(limit: int = 0) -> list[str]:
+    """自选代码:配置里的 + 自选表里的,去重保序。
+
+    页面的默认标的统一走这里 —— 别在页面里写死 600519。
+    """
+    out: list[str] = []
+    try:
+        from ..config import cfg
+        for c in cfg().watchlist or []:
+            c = str(c).strip().zfill(6)[:6] if str(c).strip().isdigit() else ""
+            if c and c not in out:
+                out.append(c)
+    except Exception:
+        pass
+    try:
+        from ..data.store import store
+        for r in store().get_watchlist():
+            c = str(r.get("code") or "").strip()
+            if c.isdigit() and len(c) <= 6:
+                c = c.zfill(6)
+                if c not in out:
+                    out.append(c)
+    except Exception:
+        pass
+    return out[:limit] if limit and limit > 0 else out
+
+
+def default_code(fallback: str = "") -> str:
+    """默认标的:自选第一只;没有自选就返回 fallback(默认空,页面应提示先加自选)。"""
+    codes = watch_codes(1)
+    return codes[0] if codes else fallback
+
+
+def watch_choices(limit: int = 40) -> list[tuple[str, str]]:
+    """给下拉框用的 (code, 显示文本) 列表。"""
+    return [(c, c) for c in watch_codes(limit)]
+
+
 class CardHead(QFrame):
     """卡片标题栏:双击把卡片在区域里铺满 / 还原。"""
 
@@ -150,7 +188,7 @@ class SmartTable(QTableWidget):
         self.setAlternatingRowColors(True)
         self.setShowGrid(False)
         self.setWordWrap(False)
-        self.verticalHeader().setDefaultSectionSize(29)
+        self.verticalHeader().setDefaultSectionSize(25)
         self.setHorizontalScrollMode(QTableWidget.ScrollPerPixel)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         hh = self.horizontalHeader()

@@ -120,10 +120,24 @@ class RuleDialog(QDialog):
                 return
         self.test_out.setText("计算中…")
 
+        code = default_code()
+        if not code:
+            try:
+                from ..data.store import store
+                row = store().conn.execute(
+                    "select code from kline_cache where klt=101 and fqt=1 "
+                    "order by bar_time desc limit 1").fetchone()
+                code = row[0] if row else ""
+            except Exception:  # noqa: BLE001
+                code = ""
+        if not code:
+            self.test_out.setText("没有可用的样本股:先在行情页加自选")
+            return
+
         def job():
             from ..data import kline as kl
             from ..engine import indicators as ind
-            bars, _ = kl.get_kline("600519", 101, 300)
+            bars, _ = kl.get_kline(code, 101, 300)
             df = ind.bars_to_df(bars)
             b = rules_mod.evaluate(self.buy.toPlainText().strip(), df)
             s = (rules_mod.evaluate(self.sell.toPlainText().strip(), df)
@@ -132,7 +146,7 @@ class RuleDialog(QDialog):
 
         runner = TaskRunner(job)
         runner.succeeded.connect(lambda r: self.test_out.setText(
-            f"茅台 {r[0]} 根日线:买点 {r[1]} 次" +
+            f"{code} {r[0]} 根日线:买点 {r[1]} 次" +
             (f",卖点 {r[2]} 次" if r[2] is not None else "") +
             ("  ·  最近 5 日内有买点" if r[3] else "  ·  近 5 日无买点")))
         runner.failed.connect(lambda e: self.test_out.setText(f"执行失败:{e}"))
@@ -179,6 +193,7 @@ class AutoPage(QWidget):
         self.cfg = cfg()
         self.gw = gateway or SimGateway()
         self._sim_gw = self.gw
+        self._ths_gw = None
         self._live_checked = False
         self._pilot: pilot.AutoPilot | None = None
         self._tasks: list[TaskRunner] = []
@@ -254,6 +269,23 @@ class AutoPage(QWidget):
         self.sl_on = QCheckBox("启用")
         self.sl_on.setToolTip("分批建仓/减仓,记住每次决策,按历史表现调参数。\n"
                               "关闭时行为与原来完全一致(一次性按目标仓位下单)")
+        # 成本摊薄(做T):不是独立策略,只是持仓上顺手压成本
+        self.cost_avg = QCheckBox("成本摊薄")
+        self.cost_avg.setToolTip(
+            "对已有底仓的票做价差,赚到的差价等于把持仓成本压下来。\n"
+            "不规定先买还是先卖:浮盈到阈值先卖、回落买回;浮亏到阈值先买、反弹卖出。\n"
+            "不限轮次,一轮平掉后继续按同样规则判断;没到阈值就不动,不动才是常态。\n"
+            "硬约束只有 T+1 —— 当天买进的份额当天不能卖。")
+        self.cost_avg_band = QDoubleSpinBox()
+        self.cost_avg_band.setRange(0.5, 30)
+        self.cost_avg_band.setDecimals(1)
+        self.cost_avg_band.setSuffix(" %")
+        self.cost_avg_band.setToolTip("现价相对持仓成本涨到这个幅度才高抛")
+        self.cost_avg_take = QDoubleSpinBox()
+        self.cost_avg_take.setRange(0.3, 15)
+        self.cost_avg_take.setDecimals(1)
+        self.cost_avg_take.setSuffix(" %")
+        self.cost_avg_take.setToolTip("高抛之后,现价回落到这个幅度才买回")
 
         rows = [
             ("策略", self.strategy, "股票池", self.pool),
@@ -264,6 +296,8 @@ class AutoPage(QWidget):
             ("每日笔数上限", self.max_orders, "模拟账户", self.account),
             ("止损", self.stop_loss, "止盈", self.take_profit),
             ("自定义股票池", self.codes, "私有学习", self.sl_on),
+            ("成本摊薄", self.cost_avg, "高抛阈值", self.cost_avg_band),
+            ("回补幅度", self.cost_avg_take, None, None),
         ]
         # 两列各 4 组:单列 8 行会把卡片顶到 400 高,挤掉下面的计划/日志
         # 注意是 (行, 列) = (i % 4, i // 4) —— 反了会铺成 16 列,
@@ -369,7 +403,8 @@ class AutoPage(QWidget):
         self.btn_auto.toggled.connect(self.toggle_auto)
         self.gw_kind = QComboBox()
         self.gw_kind.addItem("模拟盘", "sim")
-        self.gw_kind.setToolTip("公开版只有模拟盘:本地撮合,不碰真钱")
+        self.gw_kind.addItem("同花顺(真钱)", "ths")
+        self.gw_kind.setToolTip("同花顺走界面自动下单,先跑 tools/probe_ths.py 校准")
         self.gw_kind.currentIndexChanged.connect(self._on_gw_kind)
         bl.addWidget(self.dry)
         bl.addWidget(QLabel("通道"))
@@ -478,12 +513,29 @@ class AutoPage(QWidget):
         self._refresh_gw_hint()
 
     def _sync_gateway(self) -> None:
-        """公开版只有模拟盘,复用 main_window 建的那个实例。"""
-        self.gw = self._sim_gw
+        """按通道选网关:模拟盘复用 main_window 建的那个,同花顺懒建。"""
+        kind = self.gw_kind.currentData()
+        if kind == "ths":
+            if self._ths_gw is None:
+                from ..broker.ths import THSGateway
+                self._ths_gw = THSGateway(self.cfg)
+            self.gw = self._ths_gw
+        else:
+            self.gw = self._sim_gw
         self._reload_accounts()
 
     def _refresh_gw_hint(self) -> None:
-        self.gw_hint.setText("模拟盘:本地撮合,规则与回测一致,不碰真钱")
+        kind = self.gw_kind.currentData()
+        if kind != "ths":
+            self.gw_hint.setText("模拟盘:本地撮合,规则与回测一致,不碰真钱")
+            return
+        dry_ths = bool(self.cfg.get("broker.ths.dry_run", True))
+        cash = float(self.cfg.get("broker.ths.cash", 0) or 0)
+        bits = ["同花顺通道:真钱 · 先跑 python tools/probe_ths.py scan 校准窗口"]
+        bits.append(f"演练={'开' if dry_ths else '关(会真发单)'}")
+        if cash <= 0:
+            bits.append("可用资金未填(设置页填「同花顺可用资金」,否则买不进)")
+        self.gw_hint.setText("  |  ".join(bits))
 
     def _load_settings(self) -> None:
         c = self.cfg
@@ -509,6 +561,9 @@ class AutoPage(QWidget):
         self.mode.setCurrentIndex(max(0, i))
         self.stop_loss.setValue(float(c.get("autotrade.stop_loss_pct", 0) or 0))
         self.take_profit.setValue(float(c.get("autotrade.take_profit_pct", 0) or 0))
+        self.cost_avg.setChecked(bool(c.get("autotrade.cost_avg_enabled", False)))
+        self.cost_avg_band.setValue(float(c.get("autotrade.cost_avg_band_pct", 5.0) or 5.0))
+        self.cost_avg_take.setValue(float(c.get("autotrade.cost_avg_take_pct", 2.0) or 2.0))
         self.max_dd.setValue(float(c.get("autotrade.max_drawdown_pct", 0) or 0) * 100)
         k = self.dd_action.findData(c.get("autotrade.dd_action", "stop_new"))
         self.dd_action.setCurrentIndex(max(0, k))
@@ -552,12 +607,21 @@ class AutoPage(QWidget):
 
         acct = self.account.currentText() or "default"
         strat = self.strategy.currentData() or ""
-        # 公开版不连云端,报告只从本地学习结果生成
-        rep = sl.daily_report(acct, strat)
-        md = sl.render_markdown(rep)
-        sl.save_report(rep)
-        day = str(rep.get("day") or "")
-        src = "本地"
+        # 优先读云端:本地下线期间云端也在跑,那份报告更全
+        md, src, day = "", "本地", ""
+        try:
+            from .. import cloud
+            if cloud.enabled():
+                d = cloud.learn_report()
+                md = d.get("markdown") or ""
+                src, day = "云端", str(d.get("day") or "")
+        except Exception:  # noqa: BLE001
+            md = ""
+        if not md:
+            rep = sl.daily_report(acct, strat)
+            md = sl.render_markdown(rep)
+            sl.save_report(rep)
+            day = str(rep.get("day") or "")
 
         dlg = QDialog(self)
         dlg.setWindowTitle(f"自主学习报告 · {day} · {src}")
@@ -626,6 +690,9 @@ class AutoPage(QWidget):
                      ("max_orders_per_day", self.max_orders.value()),
                      ("stop_loss_pct", round(self.stop_loss.value(), 1)),
                      ("take_profit_pct", round(self.take_profit.value(), 1)),
+                     ("cost_avg_enabled", self.cost_avg.isChecked()),
+                     ("cost_avg_band_pct", round(self.cost_avg_band.value(), 1)),
+                     ("cost_avg_take_pct", round(self.cost_avg_take.value(), 1)),
                      ("max_drawdown_pct", round(self.max_dd.value() / 100, 4)),
                      ("dd_action", self.dd_action.currentData() or "stop_new"),
                      ("adaptive_enabled", self.adaptive.isChecked()),
@@ -683,7 +750,7 @@ class AutoPage(QWidget):
                 ok, msg = gw.connect()
                 self.status.emit(msg)
                 if not ok:
-                    QMessageBox.warning(self, "没连上交易通道", msg)
+                    QMessageBox.warning(self, "没连上同花顺", msg)
                     self.btn_auto.blockSignals(True)
                     self.btn_auto.setChecked(False)
                     self.btn_auto.blockSignals(False)
@@ -710,8 +777,21 @@ class AutoPage(QWidget):
         self._refresh_stats()
 
     def _check_live(self) -> bool:
-        """公开版只有模拟盘,不存在真钱通道,恒放行。"""
-        return True
+        """走同花顺且关了演练时,启动前强确认一次(每次启动都问)。"""
+        if self.gw_kind.currentData() != "ths" or self.dry.isChecked():
+            return True
+        if bool(self.cfg.get("broker.ths.dry_run", True)):
+            return True      # 界面层还是演练,不会真发
+        cash = float(self.cfg.get("broker.ths.cash", 0) or 0)
+        ret = QMessageBox.warning(
+            self, "启动真钱自动交易",
+            f"通道:同花顺(界面自动下单)\n"
+            f"演练:关 · 可用资金:{cash:,.0f}\n"
+            f"单票比例:{self.per_pct.value():.0%} · 最多持仓:{self.n_hold.value()} 只\n\n"
+            "开启后到执行窗口会真的往券商提交委托。程序不会自动重试下单,\n"
+            "但界面自动化的失败(焦点被抢、弹窗)只能靠事后核对。\n\n确定启动?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        return ret == QMessageBox.Yes
 
     def run_now(self) -> None:
         self.save_settings()
@@ -732,6 +812,9 @@ class AutoPage(QWidget):
             "codes": self._code_list(),
             "stop_loss": self.stop_loss.value() / 100,
             "take_profit": self.take_profit.value() / 100,
+            "cost_avg_enabled": self.cost_avg.isChecked(),
+            "cost_avg_band": self.cost_avg_band.value() / 100,
+            "cost_avg_take": self.cost_avg_take.value() / 100,
             "max_drawdown": self.max_dd.value() / 100,
             "dd_action": self.dd_action.currentData() or "stop_new",
             "adaptive": self.adaptive.isChecked(),
@@ -768,6 +851,9 @@ class AutoPage(QWidget):
                             auto_mode=conf.get("auto_mode"),
                             exec_mode=conf.get("exec_mode") or "none",
                             weight_mode=conf.get("weight_mode") or "equal",
+                            cost_avg=conf.get("cost_avg_enabled"),
+                            cost_avg_band=conf.get("cost_avg_band"),
+                            cost_avg_take=conf.get("cost_avg_take"),
                             account_name=conf.get("account") or "default")
             return at.run_once()
 

@@ -135,6 +135,61 @@ def collect(days: int = 30, max_stocks: int = 20) -> dict:
     return out
 
 
+def latest_day() -> str:
+    """库里最新一个有席位数据的交易日;空库返回空串。"""
+    c = _db()
+    try:
+        r = c.execute("SELECT MAX(day) d FROM lhb_seats").fetchone()
+        return str(r["d"] or "") if r else ""
+    finally:
+        c.close()
+
+
+def coverage(days: int = 60) -> dict:
+    """数据覆盖情况:起止日、天数、条数。界面顶部那一行用它。"""
+    c = _db()
+    try:
+        r = c.execute(
+            "SELECT COUNT(*) n, MIN(day) lo, MAX(day) hi FROM lhb_seats "
+            "WHERE day >= date('now', ?)", (f"-{int(days)} day",)).fetchone()
+        return {"n": int(r["n"] or 0), "lo": str(r["lo"] or ""),
+                "hi": str(r["hi"] or ""), "latest": latest_day()}
+    finally:
+        c.close()
+
+
+def sync(days: int = 30, max_stocks: int = 20) -> dict:
+    """一键:采集 → 回填收益 → 逐日预测落库 → 验证到期预测 → 给准确率。
+
+    「游资手法」页原来只有手动采集 + 一张胜率表,预测和验证从来没跑过,
+    准确率永远是 0/0。这个函数把闭环补齐,界面一个按钮就能跑。
+    """
+    out: dict = {"collect": {}, "filled": 0, "predict_days": 0,
+                 "predict_rows": 0, "review": {}, "accuracy": {}}
+    out["collect"] = collect(days=days, max_stocks=max_stocks)
+    out["filled"] = fill_returns(limit=2000)
+
+    c = _db()
+    try:
+        day_rows = c.execute(
+            "SELECT DISTINCT day FROM lhb_seats WHERE day >= date('now', ?) "
+            "ORDER BY day", (f"-{int(days)} day",)).fetchall()
+    finally:
+        c.close()
+    for r in day_rows:
+        d = str(r["day"])
+        try:
+            rows = predict_day(d, top=10)
+        except Exception:  # noqa: BLE001
+            continue
+        if rows:
+            out["predict_rows"] += save_predictions(rows)
+            out["predict_days"] += 1
+    out["review"] = review_predictions(limit=500)
+    out["accuracy"] = accuracy(days=max(days, 60))
+    return out
+
+
 # ---------------------------------------------------------------- 回填
 
 def _close_after(code: str, day: str, n: int) -> float | None:
@@ -294,7 +349,14 @@ def walk_forward(days: int = 60, train_days: int = 40,
 # ---------------------------------------------------------------- 预测
 
 def predict_day(day: str, top: int = 10) -> list[dict]:
-    """对当日上榜股预测次日方向:净买入 + 高胜率席位加持。"""
+    """对当日上榜股预测次日方向:净买入 + 高胜率席位加持。
+
+    day 传空串时用库里最新有数据的一天 —— 页面默认就点这一天的名单。
+    """
+    if not day:
+        day = latest_day()
+    if not day:
+        return []
     c = _db()
     try:
         rows = c.execute(
@@ -312,15 +374,21 @@ def predict_day(day: str, top: int = 10) -> list[dict]:
             score = 0.0
             hot = []
             for s in seats:
+                net = float(s["net"] or 0) / 1e8
                 st = stats.get(s["seat"])
-                if st and st["win5"] >= 0.55 and st["n"] >= 3:
-                    score += float(s["net"] or 0) / 1e8 * st["win5"]
-                    hot.append(s["seat"])
-            direction = "up" if score > 0 else ("down" if score < 0 else "flat")
+                # 净额是主信号;席位历史胜率只做加成/扣减,不能把方向吃掉
+                if st and st["n"] >= 3:
+                    score += net * (0.5 + st["win5"])
+                    if st["win5"] >= 0.55 and st["n"] >= 3:
+                        hot.append(f"{s['seat'][:12]}({st['win5']:.0%})")
+                else:
+                    score += net * 0.5
+            direction = ("up" if score > 0.02 else
+                         ("down" if score < -0.02 else "flat"))
             out.append({
                 "day": day, "code": code, "name": r["name"],
                 "direction": direction, "score": round(score, 3),
-                "reason": "高胜率席位:" + ",".join(hot[:3]) if hot else "无",
+                "reason": ("高胜率席位:" + ",".join(hot[:3])) if hot else "仅净额",
             })
         return out
     finally:
@@ -380,16 +448,23 @@ def review_predictions(limit: int = 100) -> dict:
 
 
 def accuracy(days: int = 60) -> dict:
-    """预测准确率。"""
+    """预测准确率。
+
+    分两层看:全部(含 flat)和「只算给了明确方向的 up/down」——
+    flat 命中率天然低,混在一起会把方向判断的真实水平冲淡。
+    """
     c = _db()
     try:
-        rows = c.execute(
-            "SELECT COUNT(*) n, SUM(correct) ok FROM lhb_predictions "
-            "WHERE correct IS NOT NULL AND day >= date('now', ?)",
-            (f"-{int(days)} day",)).fetchone()
-        n = int(rows["n"] or 0)
-        ok = int(rows["ok"] or 0)
-        return {"n": n, "ok": ok, "acc": round(ok / n, 3) if n else 0.0}
+        base = ("SELECT COUNT(*) n, SUM(correct) ok, "
+                "SUM(CASE WHEN direction IN ('up','down') THEN 1 ELSE 0 END) n_dir, "
+                "SUM(CASE WHEN direction IN ('up','down') THEN correct ELSE 0 END) ok_dir "
+                "FROM lhb_predictions WHERE correct IS NOT NULL AND day >= date('now', ?)")
+        r = c.execute(base, (f"-{int(days)} day",)).fetchone()
+        n, ok = int(r["n"] or 0), int(r["ok"] or 0)
+        n_dir, ok_dir = int(r["n_dir"] or 0), int(r["ok_dir"] or 0)
+        return {"n": n, "ok": ok, "acc": round(ok / n, 3) if n else 0.0,
+                "n_dir": n_dir, "ok_dir": ok_dir,
+                "acc_dir": round(ok_dir / n_dir, 3) if n_dir else 0.0}
     finally:
         c.close()
 

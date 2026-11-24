@@ -100,6 +100,10 @@ class AutoTrader:
                  judge: bool | None = None,
                  exec_mode: str = "none",
                  weight_mode: str = "equal",
+                 cost_avg: bool | None = None,
+                 cost_avg_band: float | None = None,
+                 cost_avg_take: float | None = None,
+                 cost_avg_ratio: float | None = None,
                  account_name: str = ""):
         self.gw = gateway
         self.cfg = config or cfg()
@@ -127,6 +131,24 @@ class AutoTrader:
         self.exec_mode = str(exec_mode or "none").lower()
         # 组合权重:equal / risk_parity / mean_variance / max_div
         self.weight_mode = str(weight_mode or "equal").lower()
+
+        # ---- 成本摊薄(做T):不是独立策略,是持仓上顺手压成本的动作
+        # 只在有底仓的票上做;偏离持仓成本到 band 才高抛,回落到 take 再买回。
+        # 不做「越跌越买」的低吸加仓 —— 那是摊薄陷阱,不是降成本。
+        if cost_avg is None:
+            cost_avg = bool(self.cfg.get("autotrade.cost_avg_enabled", False))
+        self.cost_avg = bool(cost_avg)
+        if cost_avg_band is None:
+            cost_avg_band = float(self.cfg.get("autotrade.cost_avg_band_pct", 5.0) or 5.0) / 100.0
+        if cost_avg_take is None:
+            cost_avg_take = float(self.cfg.get("autotrade.cost_avg_take_pct", 2.0) or 2.0) / 100.0
+        if cost_avg_ratio is None:
+            cost_avg_ratio = float(self.cfg.get("autotrade.cost_avg_ratio", 0.30) or 0.30)
+        self.cost_avg_band = max(0.01, float(cost_avg_band))
+        self.cost_avg_take = max(0.005, float(cost_avg_take))
+        self.cost_avg_ratio = min(0.8, max(0.1, float(cost_avg_ratio)))
+        # 已高抛、等回落的腿:{code: {sell_px, qty, day}}
+        self._t_pending: dict[str, dict] = {}
 
         # ---- 回撤闸 + 动态仓位系数(都为 0/关时不参与任何计算)
         if max_drawdown is None:
@@ -371,6 +393,138 @@ class AutoTrader:
             pass
         return {}
 
+    def _cost_average(self, plan: Plan, positions: dict, quotes: dict,
+                      acct: dict) -> set[str]:
+        """成本摊薄:在已有底仓上做价差,赚到的差价等于把持仓成本压下来。
+
+        不规定先买还是先卖,哪个方向先到阈值就走哪个:
+          · 浮盈到 band → 先卖(高抛),回落到 take 再买回
+          · 浮亏到 band → 先买(低吸),反弹到 take 再卖出(卖的是原底仓,T+1 允许)
+        也不限轮次:一轮平掉后继续按同样规则判断,能走几轮走几轮。
+        唯一的硬约束是 T+1 —— 当天买进的份额当天不能卖,所以低吸那一轮的
+        卖出只能用原有底仓,可卖数量不够时这一轮就做不成。
+
+        只对已持仓的票做,空仓不参与;没到阈值就不动,不动才是常态。
+        """
+        if not self.cost_avg or self.cost_avg_band <= 0:
+            return set()
+
+        today = time.strftime("%Y-%m-%d")
+        # 隔日的挂单作废:不跨夜等
+        self._t_pending = {c: v for c, v in self._t_pending.items()
+                           if v.get("day") == today}
+        done: set[str] = set()
+        cash = float(acct.get("cash") or 0)
+
+        def _check(code, side, px, qty, p) -> bool:
+            d = self.risk.check_order(code, side, px, qty, quote=quotes.get(code) or {},
+                                      positions=list(positions.values()),
+                                      daily_orders=self._daily_orders(),
+                                      account=acct, live=False,
+                                      max_daily_orders=self.max_orders_per_day)
+            if not d.ok:
+                plan.skipped.append({"code": code,
+                                     "reason": f"成本摊薄·{side}:{d.reason}"})
+            return d.ok
+
+        for code, p in positions.items():
+            q = quotes.get(code) or {}
+            px = float(q.get("price") or p.last_price or 0)
+            cost = float(getattr(p, "cost", 0) or 0)
+            if px <= 0 or cost <= 0 or int(p.qty or 0) <= 0:
+                continue
+
+            pend = self._t_pending.get(code)
+            if pend:
+                qty = int(pend["qty"])
+                if pend["side"] == "sell":             # 高抛过,等回落买回
+                    if px > float(pend["px"]) * (1 - self.cost_avg_take):
+                        continue
+                    if cash < qty * px * 1.002:
+                        plan.skipped.append({"code": code,
+                                             "reason": "成本摊薄:现金不够买回"})
+                        continue
+                    if not _check(code, "buy", px, qty, p):
+                        continue
+                    item = {"code": code, "name": p.name, "qty": qty, "price": px,
+                            "reason": (f"成本摊薄·买回(高抛 {pend['px']:.2f}"
+                                       f" → 现价 {px:.2f})")}
+                    if not self.dry_run:
+                        o = self.gw.place_order(code, "buy", px, qty, name=p.name)
+                        item.update(order_id=o.id, status=o.status, remark=o.remark)
+                    plan.buys.append(item)
+                    cash -= qty * px
+                else:                                   # 低吸过,等反弹卖出
+                    if px < float(pend["px"]) * (1 + self.cost_avg_take):
+                        continue
+                    avail = exchange.round_qty(code, int(p.avail_qty or 0))
+                    qty = min(qty, avail)
+                    if qty <= 0:
+                        plan.skipped.append({"code": code,
+                                             "reason": "成本摊薄:低吸那轮"
+                                                       "没有可卖的底仓(T+1)"})
+                        self._t_pending.pop(code, None)
+                        continue
+                    if not _check(code, "sell", px, qty, p):
+                        continue
+                    item = {"code": code, "name": p.name, "qty": qty, "price": px,
+                            "reason": (f"成本摊薄·卖出(低吸 {pend['px']:.2f}"
+                                       f" → 现价 {px:.2f})")}
+                    if not self.dry_run:
+                        o = self.gw.place_order(code, "sell", px, qty, name=p.name)
+                        item.update(order_id=o.id, status=o.status, remark=o.remark)
+                    plan.sells.append(item)
+                self._t_pending.pop(code, None)
+                done.add(code)
+                continue
+
+            pnl = px / cost - 1
+            if pnl >= self.cost_avg_band:               # 涨够 → 先卖
+                qty = exchange.round_qty(
+                    code, int(int(p.avail_qty or 0) * self.cost_avg_ratio))
+                if qty <= 0:
+                    plan.skipped.append({"code": code,
+                                         "reason": "成本摊薄:T+1 可卖为 0"})
+                    continue
+                if not _check(code, "sell", px, qty, p):
+                    continue
+                item = {"code": code, "name": p.name, "qty": qty, "price": px,
+                        "reason": (f"成本摊薄·高抛(成本 {cost:.2f} → 现价 {px:.2f},"
+                                   f"浮盈 {pnl:+.1%})")}
+                if not self.dry_run:
+                    o = self.gw.place_order(code, "sell", px, qty, name=p.name)
+                    item.update(order_id=o.id, status=o.status, remark=o.remark)
+                plan.sells.append(item)
+                self._t_pending[code] = {"side": "sell", "px": px, "qty": qty,
+                                         "day": today}
+                done.add(code)
+            elif pnl <= -self.cost_avg_band:            # 跌够 → 先买
+                budget = (float(acct.get("total") or 0)
+                          * self.per_position_pct * self.cost_avg_ratio)
+                qty = exchange.round_qty(code, int(budget // px)) if budget > 0 else 0
+                if qty <= 0:
+                    plan.skipped.append({"code": code,
+                                         "reason": "成本摊薄:预算不够低吸一手"})
+                    continue
+                if cash < qty * px * 1.002:
+                    plan.skipped.append({"code": code,
+                                         "reason": "成本摊薄:现金不够低吸"})
+                    continue
+                if not _check(code, "buy", px, qty, p):
+                    continue
+                item = {"code": code, "name": p.name, "qty": qty, "price": px,
+                        "reason": (f"成本摊薄·低吸(成本 {cost:.2f} → 现价 {px:.2f},"
+                                   f"浮亏 {pnl:+.1%})")}
+                if not self.dry_run:
+                    o = self.gw.place_order(code, "buy", px, qty, name=p.name)
+                    item.update(order_id=o.id, status=o.status, remark=o.remark)
+                plan.buys.append(item)
+                cash -= qty * px
+                self._t_pending[code] = {"side": "buy", "px": px, "qty": qty,
+                                         "day": today}
+                done.add(code)
+        return done
+
     def run_once(self, force: bool = False) -> Plan:
         plan = Plan(strategy=self.strategy_name, dry_run=self.dry_run)
         # 非交易时间不下单:以前 15:00 后 pilot 还在窗口里跑,会往模拟盘
@@ -613,6 +767,13 @@ class AutoTrader:
             plan.sells.append(item)
             target_codes.discard(code)
             sold_in_sl.add(code)      # 已按止损止盈处理过的,别再重复卖一遍
+
+        # 0.5) 成本摊薄:有底仓的票浮盈够多就高抛一部分,回落再买回。
+        #      排在目标调仓之前 —— 它不改目标仓位,只是把持仓成本压下来。
+        #      处理过的票本轮不再参与目标买卖,免得刚卖掉又被补回来。
+        t_done = self._cost_average(plan, positions, quotes, acct)
+        if t_done:
+            sold_in_sl |= t_done
 
         # 1) 先卖:不在目标里的持仓。
         #    只在"本轮真的选出票"或"回撤闸要求清仓"时执行 —— 选股失败时

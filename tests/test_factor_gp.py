@@ -84,4 +84,10 @@ ok("提前停止生效", gp.run(days=120, market="a", generations=2, population=
                        should_stop=lambda: True).get("rounds") == 0)
 
 print(f"\n===== 通过 {PASS} / 失败 {FAIL} =====")
-raise SystemExit(0 if FAIL == 0 else 1)
+def test_script_assertions_passed():
+    """import 期已跑完脚本断言;包一层让 pytest 能收集。"""
+    assert FAIL == 0, f"{FAIL} 项脚本断言失败"
+
+
+if __name__ == "__main__":
+    raise SystemExit(0 if FAIL == 0 else 1)
