@@ -185,18 +185,31 @@ def evaluate(panel: dict, tree: tuple, fwd: pd.DataFrame,
     if coverage < 0.6:
         return {}
     same = (st_tr["ic"] > 0) == (st_te["ic"] > 0)
-    oos_ok = same and abs(st_te["ic"]) >= 0.01
+    # 3 段稳定性:至少 2 段和训练段同向且 |IC|>=0.01
+    folds = [ic.iloc[i * len(ic) // 3:(i + 1) * len(ic) // 3]
+             for i in range(3)]
+    fold_means = [float(f.mean()) if len(f) >= 10 else 0.0 for f in folds]
+    same_sign = sum(1 for m in fold_means
+                    if m * st_tr["ic"] > 0 and abs(m) >= 0.01)
+    stability = round(same_sign / 3.0, 2)
+    oos_ok = (same and abs(st_te["ic"]) >= 0.02 and stability >= 0.66)
     depth = depth_of(tree)
     # 适应度:样本外通过的才给高分,再扣复杂度
     fit = (abs(st_tr["icir"]) + abs(st_te["icir"])) if oos_ok else 0.0
-    fit -= 0.01 * depth
+    fit -= 0.02 * depth
+    if oos_ok and stability >= 1.0 and abs(st_te["icir"]) >= 0.3:
+        risk = "低"
+    elif oos_ok:
+        risk = "中"
+    else:
+        risk = "高"
     return {"expr": expr, "depth": depth, "coverage": round(coverage, 3),
             "train_ic": st_tr["ic"], "train_icir": st_tr["icir"],
             "test_ic": st_te["ic"], "test_icir": st_te["icir"],
             "ic": st_tr["ic"], "icir": st_tr["icir"],
             "win": st_tr["win"], "fitness": round(fit, 4),
-            "oos_ok": bool(oos_ok), "label": f"GP{depth}",
-            "mutation": True}
+            "oos_ok": bool(oos_ok), "stability": stability, "risk": risk,
+            "label": f"GP{depth}", "mutation": True}
 
 
 def run(days: int = 250, max_stocks: int = 300, horizon: int = 5,

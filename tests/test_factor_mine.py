@@ -74,8 +74,10 @@ fm._panel = lambda days, max_stocks, market="a": panel      # 不碰数据库
 r = fm.mine(days=120, max_stocks=30, horizon=5, max_corr=0.99,
             windows=(3, 5, 10))
 ok("挖掘返回行", r["ok"] and len(r["rows"]) > 10, len(r.get("rows") or []))
-ok("按 |ICIR| 排序",
-   all(abs(r["rows"][i]["icir"]) >= abs(r["rows"][i + 1]["icir"])
+ok("按样本外优先、|测试ICIR| 排序",
+   all((bool(r["rows"][i].get("oos_ok")), abs(r["rows"][i].get("test_icir") or 0))
+       >= (bool(r["rows"][i + 1].get("oos_ok")),
+           abs(r["rows"][i + 1].get("test_icir") or 0))
        for i in range(len(r["rows"]) - 1)))
 ok("有入选因子", len(r["selected"]) >= 1, len(r["selected"]))
 ok("入选都被标记", all(x["selected"] for x in r["selected"]))

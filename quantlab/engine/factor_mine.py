@@ -42,6 +42,9 @@ WINDOWS = (3, 5, 10, 20, 60)
 LIBRARY = USER_DIR / "factor_library.json"
 
 
+
+
+
 def candidates(windows: tuple[int, ...] = WINDOWS) -> list[dict]:
     out = []
     for label, tpl in TEMPLATES:
@@ -113,15 +116,16 @@ def _metrics(fac: pd.DataFrame, fwd: pd.DataFrame, horizon: int) -> dict:
     if fac.empty or len(fwd) < 20:
         return {}
     # 每日 rank 相关(Spearman),忽略样本太少的横截面
-    ic_rows = []
+    ic_rows, ic_dates = [], []
     for day in fac.index:
         a, b = fac.loc[day], fwd.loc[day]
         m = a.notna() & b.notna()
         if int(m.sum()) < 10:
             continue
         ic_rows.append(a[m].rank().corr(b[m].rank()))
-    ic = pd.Series(ic_rows).dropna()
-    if len(ic) < 10:
+        ic_dates.append(day)
+    ic = pd.Series(ic_rows, index=pd.DatetimeIndex(ic_dates)).dropna()
+    if len(ic) < 30:
         return {}
     mean, std = float(ic.mean()), float(ic.std(ddof=1) or 0.0)
     ir = mean / std if std > 1e-12 else 0.0
@@ -158,10 +162,32 @@ def _metrics(fac: pd.DataFrame, fwd: pd.DataFrame, horizon: int) -> dict:
                                                   method="spearman")), 3)
     else:
         layers, spread, mono = [], 0.0, 0.0
+    # 样本外:前 70% 训练,后 30% 测试;再看 3 段稳定性
+    n_tr = max(20, int(len(ic) * 0.7))
+    tr, te = ic.iloc[:n_tr], ic.iloc[n_tr:]
+    tr_m, tr_s = float(tr.mean()), float(tr.std(ddof=1) or 0.0)
+    te_m, te_s = float(te.mean()), float(te.std(ddof=1) or 0.0)
+    tr_ir = tr_m / tr_s if tr_s > 1e-12 else 0.0
+    te_ir = te_m / te_s if te_s > 1e-12 else 0.0
+    folds = [ic.iloc[i * len(ic) // 3:(i + 1) * len(ic) // 3] for i in range(3)]
+    fold_means = [float(f.mean()) if len(f) >= 10 else 0.0 for f in folds]
+    same_sign = sum(1 for m in fold_means if m * tr_m > 0 and abs(m) >= 0.01)
+    stability = round(same_sign / 3.0, 2)
+    oos_ok = ((tr_m > 0) == (te_m > 0)) and abs(te_m) >= 0.015 and len(te) >= 15
+    if oos_ok and stability >= 0.66 and abs(te_ir) >= 0.2:
+        risk = "低"
+    elif oos_ok:
+        risk = "中"
+    else:
+        risk = "高"
     return {"ic": round(mean, 4), "icir": round(ir, 3), "win": round(win, 3),
             "t": round(float(t), 2), "n": len(ic), "coverage": round(coverage, 3),
             "turnover": round(turnover, 3), "spread": spread, "mono": mono,
             "layers": layers, "horizon": horizon,
+            "train_ic": round(tr_m, 4), "train_icir": round(tr_ir, 3),
+            "test_ic": round(te_m, 4), "test_icir": round(te_ir, 3),
+            "oos_ok": bool(oos_ok), "stability": stability, "risk": risk,
+            "fitness": round(abs(tr_ir) + abs(te_ir) if oos_ok else 0.0, 4),
             "ic_series": [[str(d)[:10], round(float(v), 4)]
                           for d, v in ic.items()]}
 
@@ -196,13 +222,15 @@ def mine(days: int = 250, max_stocks: int = 300, horizon: int = 5,
         panels[cand["expr"]] = fac
         rows.append({**cand, **st})
 
-    rows.sort(key=lambda r: abs(float(r.get("icir") or 0)), reverse=True)
-    # 贪心去重:和已入选的相关太高就跳过
+    rows.sort(key=lambda r: (bool(r.get("oos_ok")),
+                             abs(float(r.get("test_icir") or 0)),
+                             abs(float(r.get("icir") or 0))), reverse=True)
+    # 贪心去重:和已入选的相关太高就跳过;样本外没通过的不选
     selected: list[dict] = []
     for r in rows:
         if len(selected) >= top:
             break
-        if float(r.get("coverage") or 0) < 0.5 or abs(float(r.get("ic") or 0)) < 0.01:
+        if not r.get("oos_ok") or float(r.get("coverage") or 0) < 0.5:
             continue
         f = panels[r["expr"]].rank(axis=1)
         dup = False
@@ -323,6 +351,14 @@ def composite_backtest(panel: dict, factors: list[dict], horizon: int = 5,
     daily = eq.pct_change().dropna()
     total = float(eq.iloc[-1] - 1.0) * 100 if len(eq) else 0.0
     n = max(1, len(eq))
+    cut = int(n * 0.7)
+    oos_ret = ((float(eq.iloc[-1]) / float(eq.iloc[cut]) - 1) * 100
+               if cut < n and float(eq.iloc[cut]) > 0 else 0.0)
+    oos_daily = daily.iloc[cut:]
+    oos_sharpe = (float(oos_daily.mean() / oos_daily.std(ddof=1) *
+                        np.sqrt(252))
+                  if len(oos_daily) > 5 and oos_daily.std(ddof=1) > 1e-12
+                  else 0.0)
     annual = ((1 + total / 100) ** (252 / n) - 1) * 100 if n > 5 else total
     sharpe = float(daily.mean() / daily.std(ddof=1) * np.sqrt(252)) \
         if len(daily) > 5 and daily.std(ddof=1) > 1e-12 else 0.0
@@ -339,7 +375,9 @@ def composite_backtest(panel: dict, factors: list[dict], horizon: int = 5,
                     "max_drawdown_pct": round(mdd * 100, 2),
                     "turnover_avg": round(turnover_sum / max(1, n // max(1, horizon)), 2),
                     "n_days": n, "top_n": int(top_n),
-                    "horizon": int(horizon), "cost": float(cost)},
+                    "horizon": int(horizon), "cost": float(cost),
+                    "oos_return_pct": round(oos_ret, 2),
+                    "oos_sharpe": round(oos_sharpe, 2)},
         "holdings": holdings,
     }
 
@@ -495,13 +533,15 @@ def iter_mine(days: int = 250, max_stocks: int = 300, horizon: int = 5,
     pool.extend(base)
 
     def rank_rows(rows: list[dict]) -> list[dict]:
-        rows = sorted(rows, key=lambda r: abs(float(r.get("icir") or 0)),
+        rows = sorted(rows, key=lambda r: (bool(r.get("oos_ok")),
+                                           abs(float(r.get("test_icir") or 0)),
+                                           abs(float(r.get("icir") or 0))),
                       reverse=True)
         chosen, chosen_f = [], {}
         for r in rows:
             if len(chosen) >= 30:
                 break
-            if abs(float(r.get("ic") or 0)) < 0.01:
+            if not r.get("oos_ok"):
                 continue
             dup = False
             f = _fac(r["expr"]).rank(axis=1)
