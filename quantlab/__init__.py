@@ -9,6 +9,7 @@
 公开版不含交易网关、同花顺接入、加密货币与云端接口。
 """
 
-__version__ = "1.0.0"
+from .version import __version__  # noqa: F401  版本号只在 version.py 维护
+
 APP_NAME = "ashare-quant"              # 内部标识:目录名、进程名、User-Agent
 APP_TITLE = "ashare-quant 量化工作台"   # 软件内显示名:标题栏、侧栏、关于

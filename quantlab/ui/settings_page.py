@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """设置页:行情刷新、数据目录、界面与免责声明。
 
 公开版不含交易通道、券商/同花顺接入、加密货币与云端凭据。
@@ -6,16 +6,19 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QUrl, Signal
-from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QCheckBox, QDoubleSpinBox, QFormLayout, QHBoxLayout,
-                               QLabel, QLineEdit, QMessageBox, QPushButton,
-                               QScrollArea, QVBoxLayout, QWidget)
+from PySide6.QtGui import QDesktopServices, QGuiApplication
+from PySide6.QtWidgets import (QApplication, QCheckBox, QDoubleSpinBox, QFormLayout,
+                               QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+                               QPlainTextEdit, QPushButton, QScrollArea,
+                               QVBoxLayout, QWidget)
 
 from ..config import APP_DIR, USER_DIR, cfg
 from ..version import __version__
 from .. import APP_TITLE
 from .common import Card
 from .theme import TEXT_DIM
+
+DEFAULT_REPO = "https://github.com/Gray2006/ashare-quant"
 
 
 class SettingsPage(QWidget):
@@ -25,6 +28,8 @@ class SettingsPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.cfg = cfg()
+        self._update_info: dict = {}
+        self._up_job = None
         self._build()
         self.load()
 
@@ -102,6 +107,62 @@ class SettingsPage(QWidget):
         fb_form.addRow("", fb_row)
         card_fb._lay.addLayout(fb_form)
         lay.addWidget(card_fb)
+
+        # ---------------------------------------------------------- 意见反馈
+        card_note = Card("意见反馈")
+        n_form = QFormLayout()
+        self.note_text = QPlainTextEdit()
+        self.note_text.setPlaceholderText("哪里不对、想要什么功能、报错原文……写清楚就行")
+        self.note_text.setFixedHeight(110)
+        n_form.addRow("内容", self.note_text)
+        self.note_contact = QLineEdit()
+        self.note_contact.setPlaceholderText("可选,方便回你")
+        n_form.addRow("联系方式", self.note_contact)
+        self.note_env = QCheckBox("附上版本与系统信息(不含自选股、持仓、路径)")
+        self.note_env.setChecked(True)
+        n_form.addRow("", self.note_env)
+        n_row = QHBoxLayout()
+        btn_note_save = QPushButton("保存到本地")
+        btn_note_save.setObjectName("Primary")
+        btn_note_save.clicked.connect(self._submit_note)
+        btn_note_copy = QPushButton("复制成 Issue 正文")
+        btn_note_copy.clicked.connect(self._copy_note)
+        btn_note_open = QPushButton("打开收件箱目录")
+        btn_note_open.clicked.connect(self._open_notes)
+        for b in (btn_note_save, btn_note_copy, btn_note_open):
+            n_row.addWidget(b)
+        n_row.addStretch(1)
+        self.note_hint = QLabel("")
+        self.note_hint.setStyleSheet(f"color:{TEXT_DIM};")
+        n_row.addWidget(self.note_hint)
+        n_form.addRow("", n_row)
+        card_note._lay.addLayout(n_form)
+        lay.addWidget(card_note)
+
+        # -------------------------------------------------------------- 更新
+        card_up = Card("更新")
+        u_form = QFormLayout()
+        self.up_url = QLineEdit(str(self.cfg.get("update.repo_url", "") or DEFAULT_REPO))
+        self.up_url.setPlaceholderText("https://github.com/用户名/仓库名")
+        u_form.addRow("GitHub 链接", self.up_url)
+        u_row = QHBoxLayout()
+        self.btn_up_check = QPushButton("检查更新")
+        self.btn_up_check.clicked.connect(self._check_update)
+        self.btn_up_do = QPushButton("下载并更新")
+        self.btn_up_do.setEnabled(False)
+        self.btn_up_do.clicked.connect(self._apply_update)
+        self.btn_up_open = QPushButton("打开发布页")
+        self.btn_up_open.clicked.connect(self._open_release)
+        for b in (self.btn_up_check, self.btn_up_do, self.btn_up_open):
+            u_row.addWidget(b)
+        u_row.addStretch(1)
+        u_form.addRow("", u_row)
+        self.up_hint = QLabel(f"当前版本 v{__version__}")
+        self.up_hint.setWordWrap(True)
+        self.up_hint.setStyleSheet(f"color:{TEXT_DIM};")
+        u_form.addRow("", self.up_hint)
+        card_up._lay.addLayout(u_form)
+        lay.addWidget(card_up)
 
         card3 = Card("关于")
         info = QLabel(
@@ -235,6 +296,122 @@ class SettingsPage(QWidget):
                 if st.get("enabled") else "未开启")
         except Exception:  # noqa: BLE001
             self.fb_queue.setText("")
+
+    # ------------------------------------------------------------ 意见反馈
+    def _submit_note(self) -> None:
+        try:
+            from .. import notes
+            path = notes.save(self.note_text.toPlainText(),
+                              self.note_contact.text(),
+                              self.note_env.isChecked())
+            self.note_hint.setText(f"已存到 {path.name}(共 {notes.count()} 条)")
+            self.status.emit("反馈已保存到本地")
+        except Exception as e:  # noqa: BLE001
+            self.note_hint.setText(f"没存上:{str(e)[:80]}")
+
+    def _copy_note(self) -> None:
+        from .. import notes
+        body = self.note_text.toPlainText().strip()
+        if not body:
+            self.note_hint.setText("先写点内容")
+            return
+        QGuiApplication.clipboard().setText(
+            notes.build_text(body, self.note_contact.text(), self.note_env.isChecked()))
+        self.note_hint.setText("已复制,粘到 GitHub Issue 就行")
+
+    def _open_notes(self) -> None:
+        from .. import notes
+        try:
+            notes.open_dir()
+        except Exception as e:  # noqa: BLE001
+            self.note_hint.setText(f"打不开目录:{str(e)[:60]}")
+
+    # ---------------------------------------------------------------- 更新
+    def _check_update(self) -> None:
+        from .. import updater
+        from ..engine.hub import TaskRunner
+
+        url = self.up_url.text().strip()
+        self._update_info = {}
+        self.btn_up_check.setEnabled(False)
+        self.btn_up_do.setEnabled(False)
+        self.up_hint.setText("正在问 GitHub …")
+        self.cfg.set("update.repo_url", url, save=True)
+        job = TaskRunner(lambda: updater.check(url))
+        job.succeeded.connect(self._update_ok)
+        job.failed.connect(self._update_fail)
+        job.finished.connect(lambda: self.btn_up_check.setEnabled(True))
+        self._up_job = job
+        job.start()
+
+    def _update_ok(self, info) -> None:
+        from .. import updater
+        info = info if isinstance(info, dict) else {}
+        self._update_info = info
+        latest = str(info.get("version") or "")
+        remote = info.get("tag") or latest or "?"
+        if updater.is_newer(latest, __version__):
+            self.up_hint.setText(
+                f"有新版本 {remote}(当前 v{__version__})。点「下载并更新」")
+            self.btn_up_do.setEnabled(True)
+        else:
+            self.up_hint.setText(f"已经是最新的 v{__version__}(远端 {remote})")
+            self.btn_up_do.setEnabled(False)
+
+    def _update_fail(self, msg) -> None:
+        self.up_hint.setText(f"检查失败:{str(msg).splitlines()[0][:120]}")
+
+    def _open_release(self) -> None:
+        url = (self._update_info or {}).get("html_url") or self.up_url.text().strip()
+        if url:
+            QDesktopServices.openUrl(QUrl(url))
+
+    def _apply_update(self) -> None:
+        from .. import updater
+
+        info = self._update_info or {}
+        if not info:
+            return
+        if updater.is_frozen():
+            QMessageBox.information(
+                self, "更新", "打包版请到发布页手动下载新版安装包,别在程序里覆盖自己。")
+            return
+        ok = QMessageBox.question(
+            self, "更新",
+            f"将下载 {info.get('tag') or info.get('version')} 并覆盖程序文件。\n"
+            "会保留 config.json、data/、.venv/。\n"
+            "完成后程序自动退出,3 秒后重启。继续吗?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if ok != QMessageBox.Yes:
+            return
+        from ..config import APP_DIR
+        self.btn_up_do.setEnabled(False)
+        self.up_hint.setText("下载中 …(看进度条没动是正常的,大包要一会儿)")
+        from ..engine.hub import TaskRunner
+        job = TaskRunner(lambda: self._do_update(info, str(APP_DIR)))
+        job.succeeded.connect(self._update_staged)
+        job.failed.connect(self._update_fail)
+        self._up_job = job
+        job.start()
+
+    @staticmethod
+    def _do_update(info: dict, app_dir: str) -> str:
+        from .. import updater
+        zip_path = updater.download(info)
+        src = updater.extract(zip_path)
+        return str(updater.stage(src, app_dir))
+
+    def _update_staged(self, bat) -> None:
+        from .. import updater
+        try:
+            updater.apply_now(bat)
+        except Exception as e:  # noqa: BLE001
+            self.up_hint.setText(f"启动更新脚本失败:{str(e)[:90]}")
+            self.btn_up_do.setEnabled(True)
+            return
+        self.up_hint.setText("文件已就绪,程序马上退出,3 秒后自动重启")
+        self.status.emit("更新已就绪,正在重启")
+        QApplication.instance().quit()
 
     def apply_update_result(self, _res=None) -> None:  # 兼容旧调用
         return
