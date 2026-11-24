@@ -14,7 +14,7 @@ import threading
 import time
 
 import pyqtgraph as pg
-from PySide6.QtCore import QTimer, Signal
+from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFileDialog,
                                QGridLayout, QHBoxLayout, QLabel, QPushButton,
@@ -70,7 +70,7 @@ class _HelpDialog(QDialog):
         lay = QVBoxLayout(self)
         txt = QLabel(HELP)
         txt.setWordWrap(True)
-        txt.setTextFormat(txt.TextFormat.RichText)
+        txt.setTextFormat(Qt.TextFormat.RichText)
         txt.setStyleSheet(f"color:{TEXT};")
         lay.addWidget(txt, 1)
         b = QPushButton("知道了")
