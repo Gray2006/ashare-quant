@@ -63,10 +63,12 @@ def main() -> int:
     ap.add_argument("--max-stocks", type=int, default=300)
     ap.add_argument("--days", type=int, default=250)
     ap.add_argument("--horizon", type=int, default=5)
+    ap.add_argument("--fields", default="",
+                    help="只审指定字段,逗号分隔,如 debt_ratio,roe")
     args = ap.parse_args()
 
     log("取价量面板…")
-    panel = fm._panel(days=args.days, max_stocks=args.max_stocks, market="a")
+    panel = fm._panel_unbiased(days=args.days, max_stocks=args.max_stocks, market="a")
     close = panel["close"]
     codes = list(close.columns)
     dates = close.index
@@ -87,7 +89,10 @@ def main() -> int:
 
     frames = fm._frames(panel)
     rows = []
-    for field, (label, direction) in FIELDS.items():
+    only = {f.strip() for f in args.fields.split(",") if f.strip()}
+    todo = [(k, v) for k, v in FIELDS.items() if not only or k in only]
+    log(f"审 {len(todo)} 个财务因子 / 持有 {args.horizon} 日")
+    for field, (label, direction) in todo:
         fac = build_factor(pp, dates, codes, field, direction)
         if fac.empty:
             log(f"  {label} 无数据")

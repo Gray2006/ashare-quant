@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
+from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
                                QPushButton, QTabWidget, QVBoxLayout, QWidget)
 
 from ..config import APP_DIR
@@ -16,46 +16,6 @@ from ..utils import fmt_amount, fmt_pct, fmt_price
 from .board import Board
 from .common import Card, pnl_color, set_cell, table
 from .theme import TEXT_DIM, TEXT_MUT
-
-
-def _drop_high_roic(df, thr: float = 0.7):
-    """剔除 ROIC 截面分位 > thr 的票。返回 (新 df, 说明文字)。
-
-    财务数据是 PIT 的(按法定披露截止日),取最近一期。
-    没有财务数据的票**不排除** —— 宁可漏掉也不误杀。
-    """
-    try:
-        import json
-
-        import pandas as pd
-
-        from ..engine import finance_pit as fp
-
-        path = fp.ROOT / "data" / "finance_pit.json"
-        if not path.exists():
-            return df, " · 无财务缓存,未过滤"
-        cache = json.loads(path.read_text(encoding="utf-8"))
-        vals = {}
-        for code in df.get("code", []):
-            periods = cache.get(str(code)) or {}
-            best = None
-            for period, row in periods.items():
-                v = row.get("roic")
-                if isinstance(v, (int, float)):
-                    if best is None or str(period) > str(best[0]):
-                        best = (period, float(v))
-            if best:
-                vals[str(code)] = best[1]
-        if not vals:
-            return df, " · 无 ROIC 数据,未过滤"
-        cut = float(pd.Series(vals).quantile(thr))
-        keep = [c for c in df.get("code", [])
-                if str(c) not in vals or vals[str(c)] <= cut]
-        out = df[df["code"].astype(str).isin(keep)]
-        return out, (f" · 已排除高 ROIC {len(df) - len(out)} 只"
-                     f"(覆盖 {len(vals)} 只,阈值 {cut:.1f})")
-    except Exception:  # noqa: BLE001
-        return df, " · ROIC 过滤失败,未过滤"
 
 
 class ScreenPage(QWidget):
@@ -101,14 +61,6 @@ class ScreenPage(QWidget):
         self.btn_del = QPushButton("删预设")
         self.btn_del.clicked.connect(self.delete_preset)
         row1.addWidget(self.btn_del)
-        # 排除高 ROIC:3 年样本上 ROIC 中性化后 t=-2.05(高 ROIC 跑输)。
-        # 不是 alpha,是过滤器;A 股不能做空,只能用来避开。
-        self.excl_roic = QCheckBox("排除高 ROIC")
-        self.excl_roic.setToolTip(
-            "把 ROIC 截面分位 > 70% 的票剔掉。\n"
-            "依据:3 年样本、beta 中性化后 t=-2.05 —— 高 ROIC 的票跑输。\n"
-            "财务数据只覆盖部分票,没覆盖到的不排除。")
-        row1.addWidget(self.excl_roic)
         cond._lay.addLayout(row1)
 
         self.hint = QLabel("可用字段:price pct_chg turnover volume_ratio amount amplitude "
@@ -278,14 +230,9 @@ class ScreenPage(QWidget):
         self.btn_run.setEnabled(False)
         self.summary.setText("筛选中…")
 
-        excl = self.excl_roic.isChecked()
-
         def job():
             df = screener.run(expr, limit=500)
-            note = ""
-            if excl and df is not None and len(df):
-                df, note = _drop_high_roic(df)
-            return df, screener.explain(df) + note
+            return df, screener.explain(df)
 
         def on_ok(pair):
             df, text = pair
