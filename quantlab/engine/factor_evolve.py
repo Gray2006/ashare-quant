@@ -26,6 +26,25 @@ from . import factor_mine as fm
 MIN_T = 2.0
 
 
+def _data_day() -> str:
+    """日线数据的最新日期 —— 审计结果的「数据指纹」。"""
+    try:
+        from ..data.store import store
+        row = store().conn.execute(
+            "select max(bar_time) from kline_cache where klt=101 and fqt=1").fetchone()
+        day = str(row[0] or "") if row else ""
+        if not day:
+            return ""
+        # 带上当日的覆盖数:盘中只有十几只落库,补全后五千多只,
+        # 指纹跟着变才会重审 —— 否则会拿不完整的数据审一整天。
+        n = store().conn.execute(
+            "select count(*) from kline_cache where klt=101 and fqt=1 "
+            "and bar_time=?", (day,)).fetchone()[0]
+        return f"{day}@{n}"
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _verdict_of(raw_t: float | None, neu_t: float | None) -> tuple[str, str]:
     """(状态, 人话原因)"""
     r = -9.0 if raw_t is None else float(raw_t)
@@ -40,11 +59,31 @@ def _verdict_of(raw_t: float | None, neu_t: float | None) -> tuple[str, str]:
 
 
 def audit_and_record(expr: str, label: str = "", panel: dict | None = None,
-                     horizon: int = 5, save: bool = True) -> dict:
-    """审一个因子并把结果写回库。返回审计结果。"""
+                     horizon: int = 5, save: bool = True,
+                     force: bool = False) -> dict:
+    """审一个因子并把结果写回库。返回审计结果。
+
+    force=False 时,如果库里这条已经用**同一份数据**审过,直接返回上次结果 ——
+    日线一天只更新一次,同一天重复审同一个表达式不可能变。
+    """
     expr = (expr or "").strip()
     if not expr:
         return {"ok": False, "msg": "空表达式"}
+    if not force:
+        lib = fm.load_library()
+        hit = next((x for x in lib if x.get("expr") == expr), None)
+        if hit:
+            a = hit.get("audit") or {}
+            if a.get("data_day") and a.get("data_day") == _data_day():
+                return {"ok": True, "skipped": True, "expr": expr,
+                        "label": label or hit.get("label") or expr,
+                        "raw_t": a.get("raw_t"), "neu_t": a.get("neu_t"),
+                        "raw_excess": a.get("raw_excess"),
+                        "neu_excess": a.get("neu_excess"),
+                        "ic": a.get("ic"), "horizon": a.get("horizon"),
+                        "status": hit.get("status") or a.get("status"),
+                        "why": a.get("why"), "at": a.get("at"),
+                        "msg": "数据没变,复用上次审计"}
     if panel is None:
         panel = fm._panel_unbiased(days=250, max_stocks=300, market="a")
 
@@ -79,6 +118,7 @@ def _write_back(out: dict) -> None:
     lib = fm.load_library()
     hit = next((x for x in lib if x.get("expr") == out["expr"]), None)
     entry = {
+        "data_day": _data_day(),
         "raw_t": out["raw_t"], "neu_t": out["neu_t"],
         "raw_excess": out["raw_excess"], "neu_excess": out["neu_excess"],
         "ic": out["ic"], "horizon": out["horizon"],
@@ -113,7 +153,7 @@ def _write_back(out: dict) -> None:
 
 
 def evolve(panel: dict | None = None, horizon: int = 5,
-           limit: int = 30) -> dict:
+           limit: int = 30, force: bool = False) -> dict:
     """重审库里所有因子,按结果升降级。返回汇总。"""
     lib = fm.load_library()
     if not lib:
@@ -127,7 +167,7 @@ def evolve(panel: dict | None = None, horizon: int = 5,
         if not expr:
             continue
         r = audit_and_record(expr, item.get("label") or "", panel=panel,
-                             horizon=horizon, save=True)
+                             horizon=horizon, save=True, force=force)
         if r.get("ok"):
             rows.append(r)
         if i % 5 == 0:
