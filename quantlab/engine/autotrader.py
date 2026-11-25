@@ -421,7 +421,7 @@ class AutoTrader:
                                       positions=list(positions.values()),
                                       daily_orders=self._daily_orders(),
                                       account=acct, live=False,
-                                      max_daily_orders=self.max_orders_per_day)
+                                      max_daily_orders=(self.max_orders_per_day or None))
             if not d.ok:
                 plan.skipped.append({"code": code,
                                      "reason": f"成本摊薄·{side}:{d.reason}"})
@@ -795,7 +795,7 @@ class AutoTrader:
                                       positions=list(positions.values()),
                                       daily_orders=self._daily_orders(),
                                       account=acct, live=False,
-                                      max_daily_orders=self.max_orders_per_day)
+                                      max_daily_orders=(self.max_orders_per_day or None))
             if not d.ok:
                 plan.skipped.append({"code": code, "reason": f"止损:{d.reason}"})
                 continue
@@ -851,7 +851,7 @@ class AutoTrader:
                                       positions=list(positions.values()),
                                       daily_orders=self._daily_orders(),
                                       account=acct, live=False,
-                                      max_daily_orders=self.max_orders_per_day)
+                                      max_daily_orders=(self.max_orders_per_day or None))
             if not d.ok:
                 plan.skipped.append({"code": code, "reason": d.reason})
                 continue
@@ -883,6 +883,17 @@ class AutoTrader:
             px = float(q.get("price") or 0)
             if px <= 0:
                 plan.skipped.append({"code": code, "reason": "取不到现价"})
+                continue
+            # 单票当日买入次数上限 —— 603389 两小时被买 36 次的教训
+            try:
+                _cap = int(self.cfg.get("autotrade.max_buys_per_code_per_day", 3) or 0)
+            except Exception:  # noqa: BLE001
+                _cap = 3
+            if _cap > 0 and self._buys_today(code) >= _cap:
+                plan.skipped.append({
+                    "code": code,
+                    "reason": f"当日已买 {self._buys_today(code)} 次,"
+                              f"达单票上限 {_cap}"})
                 continue
             held = positions.get(code)
             held_qty = held.qty if held else 0
@@ -937,7 +948,7 @@ class AutoTrader:
                                       positions=list(self.gw.positions()),
                                       daily_orders=self._daily_orders(),
                                       account=self.gw.account(), live=False,
-                                      max_daily_orders=self.max_orders_per_day)
+                                      max_daily_orders=(self.max_orders_per_day or None))
             if not d.ok:
                 plan.skipped.append({"code": code, "reason": d.reason})
                 continue
@@ -1012,6 +1023,14 @@ class AutoTrader:
             self._maybe_report()
         self._log(plan)
         return plan
+
+    def _buys_today(self, code: str) -> int:
+        """这只票今天买过几次。"""
+        try:
+            acct = getattr(self.gw, "account_name", None)
+            return store().orders_today_count(account=acct, code=code)
+        except Exception:  # noqa: BLE001
+            return 0
 
     def _daily_orders(self) -> int:
         """当日已发委托数。

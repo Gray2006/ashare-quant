@@ -218,16 +218,19 @@ class Store:
             cur = c.execute(sql, tuple(args))
             return int(cur.rowcount or 0)
 
-    def orders_today_count(self, account: str | None = None) -> int:
+    def orders_today_count(self, account: str | None = None,
+                           code: str | None = None) -> int:
+        """当日已发委托数。可按账户和/或股票过滤。"""
         start = time.time() - (time.time() % 86400)
+        sql = "SELECT COUNT(*) AS n FROM orders WHERE ts>=? AND status!='rejected'"
+        args: list = [start]
         if account:
-            row = self.conn.execute(
-                "SELECT COUNT(*) AS n FROM orders WHERE ts>=? AND status!='rejected' AND account=?",
-                (start, account)).fetchone()
-        else:
-            row = self.conn.execute(
-                "SELECT COUNT(*) AS n FROM orders WHERE ts>=? AND status!='rejected'",
-                (start,)).fetchone()
+            sql += " AND account=?"
+            args.append(account)
+        if code:
+            sql += " AND code=?"
+            args.append(str(code))
+        row = self.conn.execute(sql, args).fetchone()
         return int(row["n"]) if row else 0
 
     def save_positions(self, positions: list[dict], account: str = "default") -> None:
