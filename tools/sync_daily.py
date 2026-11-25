@@ -25,11 +25,16 @@ def log(msg: str) -> None:
 
 
 def latest_by_code() -> tuple[str, dict[str, str]]:
-    """全市场最新交易日 + 每只票的最新日期。"""
+    """全市场最新交易日 + 每只票的最新日期。
+
+    「最新交易日」用 _last_trade_day() 而不是 max(bar_time):
+    盘中只有十几只票落库,那一行就是今天,拿它当基准会把其余五千多只
+    全判成「落后」,白跑一遍。
+    """
+    from quantlab.data.kline import _last_trade_day
     from quantlab.data.store import store
     c = store().conn
-    day = c.execute(
-        "select max(bar_time) from kline_cache where klt=101 and fqt=1").fetchone()[0]
+    day = _last_trade_day()
     rows = c.execute(
         "select code, max(bar_time) d from kline_cache where klt=101 and fqt=1 "
         "group by code").fetchall()
