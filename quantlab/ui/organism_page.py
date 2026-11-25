@@ -35,7 +35,7 @@ class _Radar(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumSize(240, 240)
+        self.setMinimumSize(300, 340)
         self._vals: list[tuple[str, float, str]] = []
         self._phase = 0.0
         self._timer = QTimer(self)
@@ -61,7 +61,7 @@ class _Radar(QWidget):
         p.setRenderHint(QPainter.Antialiasing)
         w, h = self.width(), self.height()
         cx, cy = w / 2, h / 2
-        r = min(w, h) * 0.34
+        r = min(w, h) * 0.25
         n = len(self._vals)
         if n < 3:
             p.setPen(QPen(QColor(TEXT_MUT)))
@@ -123,17 +123,33 @@ class _Radar(QWidget):
             p.setBrush(QColor(col + "44"))
             p.drawEllipse(pt, 9, 9)
 
-        # 标签
-        p.setPen(QPen(QColor(TEXT_DIM)))
+        # 标签:按状态上色,外移一点,加半透明底片防止压在网格上看不清
         f = p.font()
-        f.setPointSize(8)
+        f.setPointSize(9)
+        f.setBold(False)
         p.setFont(f)
-        for i, (name, _v, _st) in enumerate(self._vals):
+        fm = p.fontMetrics()
+        for i, (name, v, st) in enumerate(self._vals):
             a = -math.pi / 2 + 2 * math.pi * i / n
-            lx = cx + (r + 26) * math.cos(a)
-            ly = cy + (r + 26) * math.sin(a)
-            p.drawText(QRectF(lx - 46, ly - 10, 92, 20),
-                       Qt.AlignCenter, name)
+            # 夹在控件内:底部那个标签总被裁,干脆按边界收
+            lx = max(52.0, min(w - 52.0, cx + (r + 22) * math.cos(a)))
+            ly = max(12.0, min(h - 12.0, cy + (r + 22) * math.sin(a)))
+            tw = fm.horizontalAdvance(name) + 10
+            rect = QRectF(lx - tw / 2, ly - 10, tw, 20)
+            col = {"accepted": GREEN, "pending": AMBER}.get(st, TEXT_DIM)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(10, 14, 19, 190))
+            p.drawRoundedRect(rect, 6, 6)
+            p.setPen(QPen(QColor(col)))
+            p.drawText(rect, Qt.AlignCenter, name)
+            # 顶点数值
+            f2 = p.font()
+            f2.setPointSize(7)
+            p.setFont(f2)
+            p.setPen(QPen(QColor(255, 255, 255, 90)))
+            p.drawText(QRectF(lx - 30, ly + 9, 60, 12), Qt.AlignCenter,
+                       f"{v:.0%}")
+            p.setFont(f)
 
 
 class _TrainCurve(QWidget):
@@ -178,7 +194,7 @@ class _TrainCurve(QWidget):
         def px(i):
             return pad_l + iw * i / max(1, n - 1)
 
-        # loss 曲线(青)
+        # loss 曲线(青,带渐变填充)
         path = QPainterPath()
         for i, v in enumerate(losses):
             y = pad_t + ih * (1 - (v - lo) / span)
@@ -186,23 +202,45 @@ class _TrainCurve(QWidget):
                 path.moveTo(px(i), y)
             else:
                 path.lineTo(px(i), y)
+        fill = QPainterPath(path)
+        fill.lineTo(px(n - 1), pad_t + ih)
+        fill.lineTo(px(0), pad_t + ih)
+        fill.closeSubpath()
+        gfill = QLinearGradient(0, pad_t, 0, pad_t + ih)
+        gfill.setColorAt(0.0, QColor(94, 231, 240, 70))
+        gfill.setColorAt(1.0, QColor(94, 231, 240, 0))
+        p.setPen(Qt.NoPen)
+        p.setBrush(gfill)
+        p.drawPath(fill)
+        p.setBrush(Qt.NoBrush)
         p.setPen(QPen(QColor(CYAN), 2))
         p.drawPath(path)
 
-        # 准确率(紫)
+        # 准确率(亮绿)用右轴:自己的刻度区间,不然和 loss/基线挤在一起看不出趋势
+        a_lo = min(accs + [self._base or 0.5])
+        a_hi = max(accs + [self._base or 0.5])
+        a_span = (a_hi - a_lo) or 0.01
         path2 = QPainterPath()
         for i, v in enumerate(accs):
-            y = pad_t + ih * (1 - max(0.0, min(1.0, v)))
+            y = pad_t + ih * (1 - (v - a_lo) / a_span)
             if i == 0:
                 path2.moveTo(px(i), y)
             else:
                 path2.lineTo(px(i), y)
-        p.setPen(QPen(QColor(VIOLET), 2))
+        p.setPen(QPen(QColor(GREEN), 2.5))
         p.drawPath(path2)
+        # 末端亮点
+        lastx = px(n - 1)
+        lasty = pad_t + ih * (1 - (accs[-1] - a_lo) / a_span)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(GREEN + "55"))
+        p.drawEllipse(QPointF(lastx, lasty), 8, 8)
+        p.setBrush(QColor(GREEN))
+        p.drawEllipse(QPointF(lastx, lasty), 4, 4)
 
         # 基线(虚线)
         if self._base:
-            y = pad_t + ih * (1 - max(0.0, min(1.0, self._base)))
+            y = pad_t + ih * (1 - (self._base - a_lo) / a_span)
             pen = QPen(QColor(AMBER), 1)
             pen.setStyle(Qt.DashLine)
             p.setPen(pen)
@@ -224,7 +262,6 @@ class _TrainCurve(QWidget):
         p.drawText(QRectF(pad_l, 0, 60, 14), Qt.AlignLeft, "loss")
         p.setPen(QPen(QColor(VIOLET)))
         p.drawText(QRectF(pad_l + 56, 0, 80, 14), Qt.AlignLeft, "test acc")
-
 
 class OrganismPage(QWidget):
     """机体学习程度。"""
@@ -303,7 +340,7 @@ class OrganismPage(QWidget):
             grow.addWidget(c)
         right.body().addLayout(grow)
         self.lines_tbl = table(["线", "状态", "结论"],
-                               widths=[86, 52, 150], stretch_col=2)
+                               widths=[92, 46, 200], stretch_col=2)
         right.add(self.lines_tbl, 1)
         self.maint_lbl = label("", dim=True)
         self.maint_lbl.setWordWrap(True)
@@ -360,7 +397,11 @@ class OrganismPage(QWidget):
                         "pending": ("待跟", AMBER)}.get(st, ("证否", RED))
             set_cell(self.lines_tbl, i, 0, str(ln.get("name") or ""), align="left")
             set_cell(self.lines_tbl, i, 1, txt, col)
-            set_cell(self.lines_tbl, i, 2, str(ln.get("detail") or ""), align="left")
+            det = str(ln.get("detail") or "")
+            set_cell(self.lines_tbl, i, 2, det, align="left")
+            item = self.lines_tbl.item(i, 2)
+            if item is not None:
+                item.setToolTip(det)
 
     def _show_train(self, tr: dict) -> None:
         fin = tr.get("final") or {}
