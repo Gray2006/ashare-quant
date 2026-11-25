@@ -46,7 +46,7 @@ def audit_and_record(expr: str, label: str = "", panel: dict | None = None,
     if not expr:
         return {"ok": False, "msg": "空表达式"}
     if panel is None:
-        panel = fm._panel(days=250, max_stocks=300, market="a")
+        panel = fm._panel_unbiased(days=250, max_stocks=300, market="a")
 
     frames = fm._frames(panel)
     try:

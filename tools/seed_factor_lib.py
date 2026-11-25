@@ -23,7 +23,7 @@ PICKS = [
 
 
 def main() -> int:
-    panel = fm._panel(days=250, max_stocks=300, market="a")
+    panel = fm._panel_unbiased(days=250, max_stocks=300, market="a")
     for expr, label in PICKS:
         t = time.time()
         r = fe.audit_and_record(expr, label, panel=panel, horizon=5)

@@ -41,7 +41,7 @@ def main() -> int:
         return 0
     log(f"库里 {len(lib)} 条,这次审 {len(todo)} 个新候选")
 
-    panel = fm._panel(days=args.days, max_stocks=args.max_stocks, market="a")
+    panel = fm._panel_unbiased(days=args.days, max_stocks=args.max_stocks, market="a")
     ok = 0
     for i, c in enumerate(todo, 1):
         t = time.time()

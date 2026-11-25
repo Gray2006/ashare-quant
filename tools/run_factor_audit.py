@@ -42,7 +42,7 @@ def main() -> int:
     args = ap.parse_args()
 
     log(f"取面板 {args.days} 天 / {args.max_stocks} 只…")
-    panel = fm._panel(days=args.days, max_stocks=args.max_stocks, market="a")
+    panel = fm._panel_unbiased(days=args.days, max_stocks=args.max_stocks, market="a")
     close = panel.get("close")
     # audit_scores 的 _fwd_ret 要「逐票 dict」(每只票一个带 datetime 列的 DataFrame),
     # 宽表得先拆开,否则报 None of ['datetime'] are in the columns
