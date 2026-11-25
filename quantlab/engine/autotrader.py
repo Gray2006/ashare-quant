@@ -158,7 +158,12 @@ class AutoTrader:
         if dd_resume is None:
             dd_resume = float(self.cfg.get("autotrade.dd_resume_ratio", 0.5) or 0.5)
         if adaptive is None:
-            adaptive = bool(self.cfg.get("autotrade.adaptive_enabled", False))
+            # 默认值从 DEFAULTS 取:硬编码 False 会让「config 里默认 True」
+            # 对老配置完全无效,而自适应仓位恰恰是震荡市的保护(2026-11-26 修)
+            from ..config import DEFAULTS as _DEF
+            _ad_def = bool((_DEF.get("autotrade") or {}).get(
+                "adaptive_enabled", True))
+            adaptive = bool(self.cfg.get("autotrade.adaptive_enabled", _ad_def))
         if adaptive_window is None:
             adaptive_window = int(self.cfg.get("autotrade.adaptive_window", 10) or 10)
         self.max_drawdown = max(0.0, float(max_drawdown or 0))
@@ -906,10 +911,16 @@ class AutoTrader:
                     "code": code, "reason": f"单票预算 {buget_i:,.0f} 买不到一手"
                                              f"({px:.2f}×{exchange.min_qty(code)})"})
                 continue
-            # 目标缓动(默认 0 = 关):差额太小就不新开分批计划,
+            # 目标缓动:差额太小就不新开分批计划,
             # 防止「目标随权益漂移 → 反复从头分批 → 碎单连买」
+            # 默认值从 DEFAULTS 取 —— 硬编码 0 会让「config 改默认值」
+            # 对老配置完全无效(2026-11-26 修)
             try:
-                _hyst = float(self.cfg.get("selflearn.target_hysteresis_pct", 0) or 0)
+                from ..config import DEFAULTS as _DEF
+                _h_def = float((_DEF.get("selflearn") or {}).get(
+                    "target_hysteresis_pct") or 0.15)
+                _hyst = float(self.cfg.get(
+                    "selflearn.target_hysteresis_pct", _h_def) or _h_def)
                 if not sl.topup_ok(want_qty, held_qty, exchange.min_qty(code), _hyst):
                     plan.skipped.append({
                         "code": code,
