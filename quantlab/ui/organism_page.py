@@ -416,7 +416,7 @@ class OrganismPage(QWidget):
             f"今天收到 {today_n:,} 只 {arrow}{abs(delta):,}{note}   |   "
             f"覆盖 {str(d.get('first_day') or '')[:7]} 至今")
         self.data_lbl.setText(
-            f"最近 7 天每天收到的票数:\n"
+            "最近 7 天每天收到的票数:\n"
             + "  ".join(f"{str(r['day'])[5:]}={r['codes']}"
                         for r in recent[-7:])
             + f"\n因子库 {f.get('total', 0)} 条"
