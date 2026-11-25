@@ -590,6 +590,11 @@ class AutoTrader:
                     sl_cfg = float(tuned["params"]["stop_loss"])
                     tp_cfg = float(tuned["params"]["take_profit"])
                     sl_note = "学习:" + str(tuned.get("reason") or "")
+                # 策略归因判暂停且开了 auto_suspend:新开仓预算归零(只平不新开)
+                if (tuned.get("params") or {}).get("strategy_halt"):
+                    per_pct = 0.0
+                    sl_note = ((sl_note + " · ") if sl_note else "") + \
+                        "策略暂停:新开仓预算归零,止损止盈照常"
             except Exception as e:  # noqa: BLE001
                 sl_note = f"学习参数回退:{e}"
 
@@ -609,7 +614,6 @@ class AutoTrader:
         # 单票预算 = min(权益×单票比例, 单笔金额上限) × 守卫系数。
         # 不取 min 的话,每笔都会撞风控的"单笔超限"而全部失败。
         max_order = float(self.cfg.get("risk.max_order_amount", 50000) or 50000)
-        buget = min(equity * per_pct, max_order) * budget_scale
 
         # 取现价(下单要用现价,不能用收盘价)
         from ..data import em, sina
@@ -700,8 +704,6 @@ class AutoTrader:
                     picks = picks[:cap["max_positions"]]
                 # 单票预算以资金方案为准:它已经考虑了一手成本和现金底线,
                 # 比「权益×比例」更贴近实际能买到的量。
-                if cap.get("per_position"):
-                    buget = float(cap["per_position"]) * budget_scale
                 note = (note + " · " if note else "") + cp.one_line(cap)
             except Exception as e:  # noqa: BLE001
                 note = (note + " · " if note else "") + f"资金方案回退:{e}"
@@ -715,6 +717,39 @@ class AutoTrader:
         # 0) 止损止盈:先于策略信号处理,保住本金优先。
         #    全自动模式下每只票按自己的 ATR 单独定阈值(高波动的给宽一点),
         #    手动模式沿用配置里的固定百分比。
+        # 先把「昨天该止损但卖不掉」的票处理掉:只要还亏着就卖,
+        # 不等它重新跌破止损线(反弹回去就永远不卖了)
+        try:
+            from . import pending_stop
+            pend = pending_stop.pending()
+        except Exception:  # noqa: BLE001
+            pend = {}
+        for code in list(pend):
+            p = positions.get(code)
+            if p is None:
+                pending_stop.clear(code)       # 已经没持仓了
+                continue
+            q = quotes.get(code) or {}
+            px = float(q.get("price") or p.last_price or 0)
+            cost = float(getattr(p, "cost", 0) or 0)
+            if px <= 0 or cost <= 0:
+                continue
+            pnl = px / cost - 1
+            if pnl >= 0:                       # 已经回本,不用强制卖
+                continue
+            qty = exchange.round_qty(code, int(p.avail_qty or 0))
+            if qty <= 0:                       # 还是 T+1,继续等
+                pending_stop.record(code, "T+1 仍不可卖", pnl)
+                continue
+            o = self.gw.place_order(code, "sell", px, qty, name=p.name) \
+                if not self.dry_run else None
+            item = {"code": code, "name": p.name, "side": "sell", "qty": qty,
+                    "price": px, "reason": f"补执行止损(浮亏 {pnl:+.1%})"}
+            if o is not None:
+                item.update(order_id=o.id, status=o.status, remark=o.remark)
+            plan.sells.append(item)
+            pending_stop.clear(code)
+
         for code, p in (list(positions.items())
                         if (sl_cfg > 0 or tp_cfg > 0 or self.auto_mode)
                         else []):
@@ -748,6 +783,12 @@ class AutoTrader:
                 continue
             qty = exchange.round_qty(code, int(p.avail_qty or 0))
             if qty <= 0:
+                # 记下来:第二天要优先处理,否则反弹回止损线以上就永远不卖了
+                try:
+                    from . import pending_stop
+                    pending_stop.record(code, "T+1 不可卖", pnl)
+                except Exception:  # noqa: BLE001
+                    pass
                 plan.skipped.append({"code": code, "reason": "T+1 不可卖(止损未执行)"})
                 continue
             d = self.risk.check_order(code, "sell", px, qty, quote=q,
