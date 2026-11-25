@@ -47,15 +47,20 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=0, help="最多补多少只,0=不限")
     ap.add_argument("--sleep", type=float, default=0.12)
     ap.add_argument("--source", default="tx", help="tx / em / sina / auto")
+    ap.add_argument("--all", action="store_true",
+                    help="不判 stale,所有票都拉一遍(补中间日期缺口)")
+    ap.add_argument("--force", action="store_true",
+                    help="绕过缓存直接回源(补中间空洞必须用这个)")
     args = ap.parse_args()
 
-    from quantlab.data.kline import get_kline
+    from quantlab.data import kline as kl
 
     day, last = latest_by_code()
     if not day:
         log("库里没有日线")
         return 1
-    stale = [c for c, d in last.items() if d < day]
+    stale = (list(last) if args.all
+             else [c for c, d in last.items() if d < day])
     log(f"全市场最新 {day};有 {len(stale)}/{len(last)} 只停在更早的日期")
     if not stale:
         log("没有缺口")
@@ -66,7 +71,17 @@ def main() -> int:
     ok, fail = 0, 0
     for i, code in enumerate(stale, 1):
         try:
-            bars, src = get_kline(code, 101, count=args.count, source=args.source)
+            if args.force:
+                # 绕过 get_kline 的缓存判断,直接回源
+                sym = ("sh" if code.startswith(("6", "9")) else
+                       ("bj" if code.startswith(("4", "8")) else "sz")) + code
+                bars = kl._sina_kline(sym, args.count)
+                if bars:
+                    from quantlab.data.store import store as _st
+                    _st().save_kline(code, 101, 1, bars)
+            else:
+                bars, src = kl.get_kline(code, 101, count=args.count,
+                                         source=args.source)
             if bars:
                 ok += 1
         except Exception as e:  # noqa: BLE001
