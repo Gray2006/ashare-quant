@@ -288,9 +288,56 @@ def evaluate_expr(panel: dict[str, pd.DataFrame], expr: str,
     return _metrics(fac, fwd, horizon)
 
 
+def _space_gate(cands: list[dict], ignore: bool = False) -> list[dict]:
+    """按搜索空间预算筛候选。判死的空间(比如日线价量)不再抽新表达式。
+
+    ignore=True 是给人工探索用的:界面上点「挖一次」可以越权,
+    每日自动作业不行 —— 自动作业才是重复烧样本的地方。
+    """
+    if ignore:
+        return list(cands)
+    try:
+        from . import factor_space as fsp
+        left = fsp.budget()
+    except Exception:  # noqa: BLE001
+        return cands
+    kept: list[dict] = []
+    for c in cands:
+        try:
+            sp = fsp.classify(str(c.get("expr") or ""))
+        except Exception:  # noqa: BLE001
+            sp = "unknown"
+        if int(left.get(sp, 0)) <= 0:
+            continue
+        left[sp] = int(left[sp]) - 1
+        kept.append(c)
+    return kept
+
+
+def _gate_info(n_in: int, n_out: int) -> dict:
+    try:
+        from . import factor_space as fsp
+        return {"in": int(n_in), "out": int(n_out), "budget": fsp.budget()}
+    except Exception:  # noqa: BLE001
+        return {"in": int(n_in), "out": int(n_out)}
+
+
+def _record_spaces(rows: list[dict]) -> None:
+    """把这一轮挖到的表达式按空间记账。"""
+    try:
+        from collections import Counter
+        from . import factor_space as fsp
+        cnt = Counter(fsp.classify(str(r.get("expr") or "")) for r in rows)
+        for sp, n in cnt.items():
+            fsp.record(sp, mined=int(n))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def mine(days: int = 250, max_stocks: int = 300, horizon: int = 5,
          max_corr: float = 0.7, top: int = 30,
-         windows: tuple[int, ...] = WINDOWS, market: str = "a") -> dict:
+         windows: tuple[int, ...] = WINDOWS, market: str = "a",
+         ignore_budget: bool = False) -> dict:
     """跑一批候选,返回排序 + 去重后的入选名单。"""
     panel = _panel_unbiased(days, max_stocks, market)
     if not panel:
@@ -299,7 +346,10 @@ def mine(days: int = 250, max_stocks: int = 300, horizon: int = 5,
     fwd = _fwd_panel(panel, horizon)
     rows = []
     panels: dict[str, pd.DataFrame] = {}
-    for cand in candidates(windows):
+    cands = candidates(windows)
+    gated = _space_gate(cands, ignore=ignore_budget)
+    gate_info = _gate_info(len(cands), len(gated))
+    for cand in gated:
         fac = _factor_panel(panel, cand["expr"])
         if fac.empty:
             continue
@@ -335,10 +385,12 @@ def mine(days: int = 250, max_stocks: int = 300, horizon: int = 5,
             selected.append(r)
     for r in rows:
         r["selected"] = any(s["expr"] == r["expr"] for s in selected)
+    _record_spaces(rows)
     return {"ok": True, "rows": rows, "selected": selected,
             "horizon": horizon, "n_candidates": len(rows),
             "n_codes": len(panel.get("codes") or panel), "days": days,
-            "market": market, "ts": time.strftime("%H:%M:%S")}
+            "market": market, "ts": time.strftime("%H:%M:%S"),
+            "space_gate": gate_info}
 
 
 # ---------------------------------------------------------------- 因子库
@@ -405,7 +457,8 @@ def score_panel(panel: dict, factors: list[dict]) -> pd.DataFrame:
 
 
 def composite_backtest(panel: dict, factors: list[dict], horizon: int = 5,
-                       top_n: int = 5, cost: float = 0.0016) -> dict:
+                       top_n: int = 5, cost: float = 0.0016,
+                       stop_loss: float = 0.0) -> dict:
     """日频、每 horizon 天调仓、等权持有 top_n 的组合回测。
 
     只用于展示「这组因子在历史上大概什么水平」,不是实盘建议。
@@ -427,6 +480,10 @@ def composite_backtest(panel: dict, factors: list[dict], horizon: int = 5,
     equity, curve, holdings, prev = 1.0, [], [], set()
     pending: list[str] | None = None
     turnover_sum = 0.0
+    # 止损状态:entry_px 记入场价,pending_sell 记「该卖但 T+1 卖不掉」的票
+    entry_px: dict[str, float] = {}
+    pending_sell: set[str] = set()
+    stop_hits = 0
     for i, d in enumerate(close.index):
         if i % max(1, int(horizon)) == 0:
             row = score.loc[d].dropna() if d in score.index else pd.Series(dtype=float)
@@ -440,12 +497,55 @@ def composite_backtest(panel: dict, factors: list[dict], horizon: int = 5,
                 turnover_sum += turn
                 prev = set(picked)
                 pending = picked
+        # T+1 补卖:昨天该止损但卖不掉的,今天只要还亏着就卖
+        if pending_sell and holdings:
+            row_px = close.loc[d]
+            for code in list(pending_sell):
+                if code not in holdings:
+                    pending_sell.discard(code)
+                    entry_px.pop(code, None)
+                    continue
+                e = entry_px.get(code)
+                px = float(row_px.get(code) or 0)
+                if not e or px <= 0:
+                    continue
+                if px / e - 1 >= 0:        # 回本了,不强制卖
+                    pending_sell.discard(code)
+                    continue
+                # 卖掉:从持仓移除,收益按今天收盘算
+                holdings = [h for h in holdings if h != code]
+                entry_px.pop(code, None)
+                pending_sell.discard(code)
+                stop_hits += 1
+                equity *= (1 - float(cost))     # 卖出成本
+
         if holdings:
             r = float(rets.loc[d].reindex(holdings).mean())
             equity *= (1 + r)
+
+        # 止损检查:当天跌破止损线 → 挂起,明天才能卖(T+1)
+        if stop_loss > 0 and holdings:
+            row_px = close.loc[d]
+            for code in list(holdings):
+                e = entry_px.get(code)
+                if not e:
+                    continue
+                px = float(row_px.get(code) or 0)
+                if px > 0 and px / e - 1 <= -float(stop_loss):
+                    pending_sell.add(code)
+
         curve.append([str(d)[:10], round(equity, 4)])
         if pending is not None:          # 收盘后换仓,明天才生效
             holdings = pending
+            # 新进的票记入场价(次日开盘价,没有就用收盘)
+            row_px = close.loc[d]
+            for code in holdings:
+                if code not in entry_px:
+                    entry_px[code] = float(row_px.get(code) or 0) or 1.0
+            # 已经不在持仓里的清掉
+            for code in list(entry_px):
+                if code not in holdings:
+                    entry_px.pop(code, None)
             pending = None
 
     eq = pd.Series([v for _d, v in curve])
@@ -493,7 +593,9 @@ def composite_backtest(panel: dict, factors: list[dict], horizon: int = 5,
                     "bench_total_pct": round(bench_total, 2),
                     "bench_annual_pct": round(bench_annual, 2),
                     "excess_total_pct": round(excess_total, 2),
-                    "excess_annual_pct": round(excess_annual, 2)},
+                    "excess_annual_pct": round(excess_annual, 2),
+                    "stop_loss": float(stop_loss),
+                    "stop_hits": int(stop_hits)},
         "holdings": holdings,
     }
 
@@ -536,6 +638,14 @@ def run_daily(markets: tuple[str, ...] = ("a", "crypto"), days: int = 250,
         if not auto_due(m):
             out[m] = {"skipped": "今天已经跑过"}
             continue
+        # 空间预算为 0 → 这个信息集已经被证伪,再跑就是重复烧样本
+        try:
+            from . import factor_space as fsp
+            if not fsp.can_mine("daily_ohlcv"):
+                out[m] = {"skipped": "日线价量空间预算为 0(已证伪),换信息集再挖"}
+                continue
+        except Exception:  # noqa: BLE001
+            pass
         try:
             from . import factor_gp
             r = factor_gp.run(days=days, max_stocks=max_stocks,
@@ -603,7 +713,8 @@ def _mutate(rows: list[dict], rng: np.random.Generator,
 def iter_mine(days: int = 250, max_stocks: int = 300, horizon: int = 5,
               market: str = "a", rounds: int = 8, max_corr: float = 0.7,
               time_budget: float = 300.0, seed: int = 7,
-              progress=None, should_stop=None) -> dict:
+              progress=None, should_stop=None,
+              ignore_budget: bool = False) -> dict:
     """持续挖:每轮在上一轮头部因子上变异,直到轮数/时间/无提升。
 
     progress: 每轮结束回调 {"round","total","pool","best","improved"}
@@ -645,8 +756,9 @@ def iter_mine(days: int = 250, max_stocks: int = 300, horizon: int = 5,
             got.append({**c, **st})
         return got
 
-    base = evaluate(candidates())
+    base = evaluate(_space_gate(candidates(), ignore=ignore_budget))
     pool.extend(base)
+    _record_spaces(base)
 
     def rank_rows(rows: list[dict]) -> list[dict]:
         rows = sorted(rows, key=lambda r: (bool(r.get("oos_ok")),
