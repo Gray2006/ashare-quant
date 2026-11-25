@@ -13,46 +13,52 @@ import time
 from PySide6.QtCore import QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QFrame, QHBoxLayout,
-                               QLabel, QMainWindow, QMessageBox, QPushButton,
-                               QScrollArea, QStackedWidget, QStatusBar,
-                               QVBoxLayout, QWidget)
+                               QLabel, QMainWindow, QPushButton, QScrollArea,
+                               QStackedWidget, QStatusBar, QVBoxLayout, QWidget)
 
+from ..broker.sim import SimGateway
 from ..config import cfg
 from ..engine.hub import QuoteHub
 from ..utils import SESSION_LABEL, fmt_pct, fmt_price, session_state
 from ..version import __version__ as VERSION
+from .auto_page import AutoPage
 from .backtest_page import BacktestPage
 from .board import Board
+from .cloud_page import CloudPage
+from .crypto_page import CryptoPage
+from .crypto_quant_page import CryptoQuantPage
 from .forecast_page import ForecastPage
 from .pick_page import PickPage
 from .risk_page import RiskBandPage
 from .health_page import HealthPage
 from .help import HelpDialog
+from .learn_page import LearnPage
 from .macro_page import MacroPage
 from .patterns_page import PatternPage
 from .quote_page import QuotePage
+from .review_page import ReviewPage
+from .organism_page import OrganismPage
 from .screen_page import ScreenPage
 from .sector_page import SectorPage
 from .settings_page import SettingsPage
 from .ta_page import TAPage
 from .grid_page import GridPage
-from .lhb_page import LhbPage
-from .limitup_page import LimitUpPage
 from .hotspot_page import HotspotPage
+from .factor_mine_page import FactorMinePage
 from .company_page import CompanyPage
 from .company_eval_page import CompanyEvalPage
-from .factor_mine_page import FactorMinePage
+from .limitup_page import LimitUpPage
+from .lhb_page import LhbPage
 from .strategy_page import StrategyPage
 from .news_page import NewsPage
 from .alert_page import AlertPage
-from .trade_page import TradePage
-from .review_page import ReviewPage
-from .learn_page import LearnPage
-from .auto_page import AutoPage
 from .theme import (ACCENT, BORDER, DOWN, FLAT, QSS, TEXT_MUT, UP, apply_app_palette)
+from .trade_page import TradePage
 from .world_page import WorldPage
 
-# 导航按「干什么」分组。公开版不含交易、加密、云端与私有学习页。
+# 导航按「干什么」分组,不再是 21 行平铺。侧栏的分组名来自这里的第一个元素。
+# 顺序就是页面顺序(Ctrl+1~n 也跟它走),所以「加密」必须紧跟「交易」:
+# tools/selftest_okx.py 断言了这条。
 NAV_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
     ("看盘", [
         ("行情", "quote", "自选股实时报价 · 分时 / K线 / 资金流 / 新闻"),
@@ -63,7 +69,6 @@ NAV_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
         ("市场热点", "hotspot", "情绪 · 概念/行业涨幅榜 · 强势个股 · 热点快讯"),
         ("全球市场", "world", "美股港股商品汇率 · 国际新闻时政"),
         ("资讯", "news", "财经资讯与政策 · 分类过滤 · 双击看原文"),
-        ("预警", "alert", "价格/涨跌幅条件预警 · 命中留痕"),
     ]),
     ("研究", [
         ("公司分析", "company", "F10 资料 · 主营构成 · 财务趋势 · 估值同业 · 股东事件"),
@@ -71,29 +76,62 @@ NAV_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
         ("选股", "screen", "条件筛选 · 主力资金榜 · 板块资金流"),
         ("技术分析", "ta", "缠论结构 · 道氏趋势 · 智能资金 · 背离 · 共振投票"),
         ("形态", "pattern", "K线形态识别 · 出现之后的实测涨跌频率"),
-        ("因子挖掘", "factor_mine", "模板迭代 / 遗传搜索 · IC/ICIR/样本外 · 组合回测"),
+        ("因子挖掘", "factor_mine", "批量试表达式 · IC/ICIR/分层收益 · 自动去重"),
         ("策略广场", "strategy", "内置策略 · 自定义规则 · Pine Script 导入"),
         ("回测", "backtest", "策略回测 · 净值曲线 · 成绩单与批量对比"),
     ]),
     ("研判", [
         ("大盘研判", "macro", "五维打分:指数趋势 / 广度 / 资金 / 外围 / 消息"),
         ("走势预判", "forecast", "涨/平/跌概率 + 因子贡献 + 走查命中率"),
-        ("涨幅预选", "pick", "全市场快扫 · 每日候选 + 参考幅度"),
+        ("涨幅预选", "pick", "全市场快扫 · 每日候选 + 参考幅度 + 回传与回填"),
         ("风险档位", "risk", "横截面波动档位 · 建议仓位上限 · 走查校验"),
     ]),
     ("交易", [
-        ("模拟盘", "trade", "多账户模拟下单 · 持仓与委托 · T+1 与费用按回测口径"),
-        ("自动交易", "auto", "定时跑策略调仓 · 只走模拟盘 · 回撤闸与动态仓位"),
-        ("复盘", "review", "已实现盈亏 · 纪律检查 · 按标的与按日归因"),
-        ("学习", "learn", "自适应参数 · 今日日报 · 预测准确率"),
+        ("交易", "trade", "模拟盘下单 · 持仓与委托;可接同花顺"),
+        ("加密", "crypto", "OKX 现货 7×24 · K线 / 下单 / 持仓,支持模拟交易"),
+        ("加密量化", "cryptoq", "独立模拟盘 · 本地零延迟撮合 · 多因子自动交易 + 学习"),
+        ("自动交易", "auto", "调度、计划、自定义策略与执行日志"),
+        ("预警", "alert", "价格/涨跌幅条件预警 · 命中留痕"),
     ]),
     ("管理", [
+        ("复盘", "review", "已实现盈亏 · 纪律检查 · 按标的与按日归因"),
+        ("学习", "learn", "私有自适应学习 · 今日日报 · 参数建议 · 预测准确率"),
+        ("机体", "organism", "学习程度 · 能力雷达 · 训练曲线 · 进化时间线"),
         ("数据健康", "health", "数据源状态 · 熔断明细 · 各领域数据新鲜度"),
-        ("设置", "settings", "刷新频率、风控硬闸、数据源与界面"),
+        ("设置", "settings", "刷新频率、风控硬闸、同花顺通道、OKX 密钥"),
     ]),
 ]
 
+# 扁平化:全应用只认这一份顺序(页面索引、Ctrl+n、page_map 都按它)
 NAV: list[tuple[str, str, str]] = [item for _g, items in NAV_GROUPS for item in items]
+
+
+def _build_nav() -> tuple[list[tuple[str, str, str]], list[tuple[str, list]]]:
+    """按配置决定要不要加「云端」页。
+
+    这一页只在想看的机器上出现(config `ui.cloud_page`),
+    发给别人的包里默认没有 —— 导航顺序、页面下标都跟着它变,
+    所以只在这里拼一次,别处一律用 NAV / NAV_GROUPS。
+    """
+    groups = [(g, list(items)) for g, items in NAV_GROUPS]
+    nav = [item for _g, items in groups for item in items]
+    if not bool(cfg().get("ui.cloud_page", False)):
+        return nav, groups
+    if any(k == "cloud" for _n, k, _h in nav):
+        return nav, groups
+    row = ("云端", "cloud", "群体先验 · 云端学习日报 · 别人回传的统计")
+    for i, (g, items) in enumerate(groups):
+        if g == "管理":
+            groups[i] = (g, items + [row])
+            break
+    else:
+        groups.append(("管理", [row]))
+    nav = [item for _g, items in groups for item in items]
+    return nav, groups
+
+
+NAV, NAV_GROUPS = _build_nav()
+# key → 所属分组名
 NAV_GROUP_OF: dict[str, str] = {
     key: gname for gname, items in NAV_GROUPS for _n, key, _h in items}
 
@@ -167,42 +205,35 @@ class MainWindow(QMainWindow):
     # key → 页面类。加页只要 NAV_GROUPS 加一行 + 这里加一个构造器,漏了会断言报错。
     _BUILDERS: dict[str, type] = {
         "quote": QuotePage, "screen": ScreenPage, "sector": SectorPage,
-        "lhb": LhbPage, "backtest": BacktestPage,
+        "lhb": LhbPage, "limitup": LimitUpPage, "backtest": BacktestPage,
+        "company": CompanyPage, "company_eval": CompanyEvalPage, "auto": AutoPage,
+        "hotspot": HotspotPage,
+        "factor_mine": FactorMinePage,
         "strategy": StrategyPage, "macro": MacroPage,
         "forecast": ForecastPage, "pick": PickPage, "risk": RiskBandPage,
         "pattern": PatternPage, "ta": TAPage, "grid": GridPage,
-        "world": WorldPage, "news": NewsPage,
-        "alert": AlertPage,
-        "health": HealthPage, "settings": SettingsPage,
-        "limitup": LimitUpPage, "hotspot": HotspotPage,
-        "company": CompanyPage, "company_eval": CompanyEvalPage,
-        "factor_mine": FactorMinePage,
-        "trade": TradePage, "review": ReviewPage, "learn": LearnPage,
-        "auto": AutoPage,
+        "world": WorldPage, "news": NewsPage, "trade": TradePage,
+        "organism": OrganismPage,
+        "alert": AlertPage, "review": ReviewPage, "crypto": CryptoPage,
+        "cryptoq": CryptoQuantPage,
+        "health": HealthPage, "settings": SettingsPage, "learn": LearnPage,
+        "cloud": CloudPage,
     }
     # 要网关实例的页
-    _NEED_GW = ("trade", "review", "auto")
-    # 启动就要在的页:首页 + 后台常驻的预警轮询 + 设置
+    _NEED_GW = ("auto", "trade", "review")
+    # 启动就要在的页:首页 + 后台常驻的预警轮询 + 设置(启动更新检查要回连它)
     _EAGER = ("quote", "settings", "alert")
 
     def __init__(self):
         super().__init__()
         apply_app_palette()      # 占位符/禁用色:QSS 管不到,先铺调色板
         self.cfg = cfg()
-        # 模拟盘网关:交易/复盘两页共用同一个实例,账户切换才不会各走各的
-        from ..broker.sim import SimGateway
         self.gw = SimGateway()
         self._build()
         self._apply_geometry()
         self._start_hub()
-        try:
-            from .. import feedback
-            feedback.start()
-        except Exception:
-            pass
-        QTimer.singleShot(20000, self._auto_factor_mine)
-        # 启动后后台问一次 GitHub,有新版本才提醒;一天最多一次,失败静默
-        QTimer.singleShot(8000, self._auto_check_update)
+        self._start_agent()
+        self._update_found.connect(self.settings_page.apply_update_result)
 
         self._clock = QTimer(self)
         self._clock.timeout.connect(self._tick)
@@ -237,6 +268,26 @@ class MainWindow(QMainWindow):
             pass
 
     # ------------------------------------------------------------ 启动
+    def _start_agent(self) -> None:
+        """本机控制接口:让 AI 代理直接操作模拟盘。只绑 127.0.0.1。"""
+        self._agent = None
+        if not self.cfg.get("agent.enabled", True):
+            return
+        try:
+            from ..agent.server import ensure_token, start_background
+            port = int(self.cfg.get("agent.port", 8765))
+            # token 由 ensure_token 生成并落盘,不再依赖可能缺失的配置项
+            token = ensure_token()
+            self._agent = start_background(port, token)
+            if self._agent is None:
+                self.statusBar().showMessage(f"agent 端口 {port} 被占用,本机接口未启动", 8000)
+            else:
+                self.statusBar().showMessage(
+                    f"本机接口已开:http://127.0.0.1:{port} (给 AI 代理用)", 10000)
+        except Exception as e:  # noqa: BLE001
+            self.statusBar().showMessage(f"agent 启动失败:{e}", 8000)
+
+    # ------------------------------------------------------------ UI
     def _build(self):
         root = QWidget()
         root.setObjectName("Root")
@@ -306,6 +357,32 @@ class MainWindow(QMainWindow):
 
         start = self.page_map.get(str(self.cfg.get("ui.start_page", "quote")), 0)
         self._go(start)
+        self._startup_update_check()
+        # 数据回流后台线程:只负责把本地 spool 发出去,不参与交易。
+        # 没配云端 / 关了开关时 start() 自己就什么都不做。
+        try:
+            from .. import feedback
+            feedback.start()
+        except Exception:
+            pass
+        # 每天首次启动,后台跑一轮因子挖掘(A股 + 加密),落盘后页面直接读
+        QTimer.singleShot(20000, self._auto_factor_mine)
+        # 龙虎榜:盘后启动时补采一次(计划任务管主路径,这里兜机器一直开着的情况)
+        QTimer.singleShot(45000, self._catchup_lhb)
+        # 模型包:后台拉一次因子池/权重,拿不到就用内置保守默认
+        try:
+            from .. import model
+            model.start()
+        except Exception:
+            pass
+        # 加密量化:配置开了就自动起调度。7×24,不受 A股 时段影响。
+        try:
+            from ..config import cfg
+            if cfg().get("crypto_quant.enabled", False):
+                from ..crypto.scheduler import scheduler
+                scheduler().start()
+        except Exception:
+            pass
 
     # ------------------------------------------------ 页面按需构造
     def _ensure_page(self, key: str) -> QWidget | None:
@@ -358,7 +435,7 @@ class MainWindow(QMainWindow):
         bar.showMessage(text, timeout)
 
     def _auto_factor_mine(self) -> None:
-        """每天首次启动后台跑一轮因子挖掘(公开版只跑 A 股)。"""
+        """后台自动挖掘;不阻塞界面,失败静默(页面会显示今天没跑)。"""
         import threading
 
         def work():
@@ -370,67 +447,47 @@ class MainWindow(QMainWindow):
 
         threading.Thread(target=work, name="factor-auto", daemon=True).start()
 
-    # ------------------------------------------------------------ 更新提醒
-    def _auto_check_update(self) -> None:
-        """启动后问一次 GitHub。一天一次,失败静默,有新版本才弹。"""
-        import datetime as dt
+    def _catchup_lhb(self) -> None:
+        """盘后补采龙虎榜。计划任务是主路径,这里兜「机器一直开着、任务没触发」。"""
+        import threading
+        import time as _time
 
-        from .. import updater
-        from ..engine.hub import TaskRunner
-
-        today = dt.date.today().isoformat()
-        if str(self.cfg.get("update.last_check_day") or "") == today:
+        now = _time.localtime()
+        if now.tm_hour < 15:           # 盘中/盘前不拉,数据还没出
             return
-        url = str(self.cfg.get("update.repo_url") or "Gray2006/ashare-quant")
-        self.cfg.set("update.last_check_day", today, save=True)
-        job = TaskRunner(lambda: updater.check(url))
-        job.succeeded.connect(self._on_update_checked)
-        job.failed.connect(lambda _e: None)      # 网络不通不打扰
-        self._upd_job = job
-        job.start()
 
-    def _on_update_checked(self, info) -> None:
-        from .. import updater
-        from ..version import __version__
+        def work():
+            try:
+                from ..engine import hotmoney as hm
+                cov = hm.coverage(90)
+                today = _time.strftime("%Y-%m-%d")
+                if (cov.get("latest") or "") >= today:
+                    return             # 今天已经采过
+                hm.sync(days=2, max_stocks=15)
+            except Exception:  # noqa: BLE001
+                pass
 
-        info = info if isinstance(info, dict) else {}
-        latest = str(info.get("version") or "")
-        if not latest or not updater.is_newer(latest, __version__):
-            return
-        box = QMessageBox(self)
-        box.setWindowTitle("有新版本")
-        box.setIcon(QMessageBox.Information)
-        box.setText(f"发现新版本 v{latest}（当前 v{__version__}）")
-        box.setInformativeText("去设置页可以看更新说明并下载")
-        b_go = box.addButton("去更新", QMessageBox.AcceptRole)
-        box.addButton("以后再说", QMessageBox.RejectRole)
-        box.setModal(False)
-        box.finished.connect(lambda _r: self._update_go(box, b_go))
-        box.show()
-
-    def _update_go(self, box, b_go) -> None:
-        if box.clickedButton() is not b_go:
-            return
-        keys = [k for _n, k, _h in NAV]
-        if "settings" in keys:
-            self._go(keys.index("settings"))
+        threading.Thread(target=work, name="lhb-catchup", daemon=True).start()
 
     def _wire_page(self, key: str, page) -> None:
         """页面信号接到主窗口。只有真造出来的页面才接线。"""
         if hasattr(page, "status"):
             page.status.connect(self._status)
-        if key == "sector":
+        if key == "screen":
+            page.send_to_trade.connect(self._goto_trade)
+        elif key == "company":
+            page.open_eval.connect(self._goto_eval)
+        elif key == "sector":
             page.open_stock.connect(self._goto_stock)
         elif key == "quote":
             page.open_sector.connect(self._goto_sector)
-        elif key == "company":
-            page.open_eval.connect(self._goto_eval)
         elif key == "risk":
             page.goto_quote.connect(self._goto_stock)
-        elif key == "screen":
-            page.send_to_trade.connect(self._goto_trade)
         elif key == "settings":
             page.settings_changed.connect(self._apply_settings)
+        elif key == "trade":
+            page.set_gateway(self.gw)
+            page.gw_combo.setCurrentIndex(0)
 
     def _on_page_changed(self, idx: int) -> None:
         if self._building or not (0 <= idx < len(NAV)):
@@ -708,12 +765,20 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ 行情
     def _hub_codes(self) -> list[str]:
-        """行情订阅 = 自选股 + 模拟盘持仓(持仓不在自选里也要能算市值)。"""
+        """行情订阅 = 自选 ∪ 各模拟账户持仓。
+
+        自动交易买进来的票不一定在自选里,以前只订自选 → 持仓的现价/市值/盈亏
+        永远停在成本价。这里把持仓码一起订上,交易页才有实时价。
+        """
         codes = list(self.quote_page.codes)
         try:
-            gw = getattr(self, "gw", None)
-            if gw is not None:
-                codes += [p.code for p in gw.positions()]
+            from ..data.store import store
+            s = store()
+            accts = [a["name"] for a in s.sim_accounts()] or ["default"]
+            for acc in accts:
+                for r in s.load_positions(acc):
+                    if int(r.get("qty") or 0) > 0:
+                        codes.append(r["code"])
         except Exception:
             pass
         seen: set[str] = set()
@@ -748,9 +813,11 @@ class MainWindow(QMainWindow):
         self._sub_timer.setInterval(5000)
         self._sub_timer.timeout.connect(self._sync_hub_codes)
         self._sub_timer.start()
-        # 学习调度:全天常驻,收盘后跑一次参数学习与预测回填
+        # 学习调度:全天常驻,收盘后跑一次,和自动交易开关解耦。
+        # 以前学习挂在 AutoPilot 线程里,不开自动交易就不学习。
         from ..engine.learn_scheduler import LearnScheduler
-        self._learn_sched = LearnScheduler(log=lambda m: self._status(m, 8000))
+        self._learn_sched = LearnScheduler(
+            log=lambda m: self._status(m, 8000))
         self._learn_sched.start()
 
     def _on_feed(self, st: dict) -> None:
@@ -779,13 +846,10 @@ class MainWindow(QMainWindow):
 
     def _on_quotes(self, data: dict) -> None:
         self.quote_page.update_quotes(data)
-        # 模拟盘持仓要靠行情重算市值与浮盈,页面没建就不用喂
+        # 交易页没建过就别为了推价差去建它(建页要起心跳,等于白跑)
         trade = self._built.get("trade")
         if trade is not None:
-            try:
-                trade.update_quotes(data)
-            except Exception:
-                pass
+            trade.update_quotes(data)
 
     def _on_indexes(self, rows: list) -> None:
         want = {"000001": 0, "399001": 1, "399006": 2, "000300": 3}
@@ -853,6 +917,32 @@ class MainWindow(QMainWindow):
                 return
         self.statusBar().showMessage("这一页没有可刷新的动作", 3000)
 
+    def _startup_update_check(self) -> None:
+        """启动时在后台看一眼有没有新版本;没配地址就什么都不做。
+
+        不阻塞启动:网络慢/离线时用户照样用,失败了也不打扰。
+        """
+        if not bool(self.cfg.get("update.enabled", True)):
+            return
+        if not bool(self.cfg.get("update.check_on_start", True)):
+            return
+        url = str(self.cfg.get("update.url", "") or "").strip()
+        if not url:
+            return
+        timeout = float(self.cfg.get("update.timeout", 5.0))
+
+        def work() -> None:
+            try:
+                from ..update import check
+                res = check(url, timeout=timeout)
+            except Exception:
+                return
+            if res.get("newer"):
+                self._update_found.emit(res)
+
+        import threading
+        threading.Thread(target=work, daemon=True).start()
+
     def _open_help(self) -> None:
         try:
             dlg = HelpDialog(self)
@@ -896,20 +986,15 @@ class MainWindow(QMainWindow):
         self.sector_page.focus_board(name)
 
     def _goto_trade(self, rows: list) -> None:
-        """选股页点「去下单」→ 模拟盘页带代码、名称与价格。"""
         self._go(self.page_map["trade"])
-        if not rows:
-            return
-        r = rows[0]
-        page = self._ensure_page("trade")
-        if page is None:
-            return
-        page.code.setCurrentText(str(r.get("code") or ""))
-        if r.get("name"):
-            page.name_label.setText(str(r["name"]))
-        if r.get("price"):
-            page.price.setValue(float(r["price"]))
-        page.lookup()
+        if rows:
+            r = rows[0]
+            self.trade_page.code.setCurrentText(r["code"])
+            if r.get("name"):
+                self.trade_page.name_label.setText(str(r["name"]))
+            if r.get("price"):
+                self.trade_page.price.setValue(float(r["price"]))
+            self.trade_page.lookup()
 
     def _apply_settings(self) -> None:
         interval = float(self.cfg.get("refresh_seconds.quote", 1))
@@ -917,7 +1002,20 @@ class MainWindow(QMainWindow):
             self.hub.set_interval(interval)
             self._subscribed = self._hub_codes()
             self.hub.set_codes(self._subscribed)
+        try:
+            crypto = self._built.get("crypto")
+            if crypto is not None and crypto.ticker_hub is not None:
+                crypto.ticker_hub.set_interval(
+                    float(self.cfg.get("refresh_seconds.crypto", 2.0)))
+                crypto.ticker_hub.set_codes(crypto._insts())
+        except Exception:
+            pass
         self.quote_page.reload_watchlist()
+        # 「显示云端页」改了要重启才生效:导航在启动时拼好,这里只提醒一句
+        want_cloud = bool(self.cfg.get("ui.cloud_page", False))
+        has_cloud = "cloud" in self.page_map
+        if want_cloud != has_cloud:
+            self._status("「云端」页的显示开关已保存,重启后生效")
 
     @staticmethod
     def _exit_now(code: int = 0) -> None:
@@ -943,11 +1041,6 @@ class MainWindow(QMainWindow):
         # 会以 0xC0000409 fail-fast 崩(现象:关窗偶尔崩、偶尔干净)。
         # TerminateProcess 不跑 DLL 卸载通知,进程直接没,线程跟着一起走。
         try:
-            from .. import feedback
-            feedback.stop()
-        except Exception:
-            pass
-        try:
             self._clock.stop()
         except Exception:
             pass
@@ -962,6 +1055,11 @@ class MainWindow(QMainWindow):
         try:                     # 退出前截断 WAL,否则 -wal 会一直留几个 MB
             from ..data.store import store
             store().checkpoint()
+        except Exception:
+            pass
+        try:                     # 加密量化独立库同理
+            from ..crypto.store import store as cstore
+            cstore().checkpoint()
         except Exception:
             pass
         self._save_geometry()
@@ -982,14 +1080,25 @@ class MainWindow(QMainWindow):
                     fn()
                 except Exception:
                     pass
-        for page in (self.macro_page, self.forecast_page,
+        for page in (self.auto_page, self.macro_page, self.forecast_page,
                      self.pick_page,
-                     self.risk_page, self.world_page,
-                     self.health_page, self.pattern_page,
+                     self.risk_page, self.world_page, self.crypto_page,
+                     self.health_page, self.pattern_page, self.review_page,
                      self.ta_page, self.grid_page, self.lhb_page,
-                     self.strategy_page, self.news_page, self.alert_page):
+                     self.limitup_page, self.company_page, self.company_eval_page,
+                     self.hotspot_page,
+                     self.factor_mine_page,
+                     self.strategy_page, self.news_page, self.alert_page,
+                     self.learn_page):
             try:
                 page.stop()
+            except Exception:
+                pass
+        # 云端页是可选的(ui.cloud_page),没建就没有这一页,单独按 _built 取
+        cloud_page = (getattr(self, "_built", {}) or {}).get("cloud")
+        if cloud_page is not None:
+            try:
+                cloud_page.stop()
             except Exception:
                 pass
         try:
