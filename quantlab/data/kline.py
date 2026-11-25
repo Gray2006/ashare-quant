@@ -116,6 +116,39 @@ def _last_trade_day() -> str:
     return d.isoformat()
 
 
+_complete_day_cache: dict[int, tuple[float, str]] = {}
+
+
+def complete_day(min_codes: int = 3000, ttl: float = 300.0) -> str:
+    """最近一个「覆盖数足够」的交易日(YYYY-MM-DD)。
+
+    盘中的今天只有十几只票落库,拿它当完整日线会出三类错:
+    自检误报覆盖不足、审计拿残缺数据审一整天、补数把五千多只全判成落后。
+    统一走这里判断,别各自写 max(bar_time)。
+
+    ttl 秒内复用上次结果 —— 这个查询是 5 天 group by,约 1.7 秒。
+    """
+    import time as _t
+    now = _t.time()
+    hit = _complete_day_cache.get(int(min_codes))
+    if hit and now - hit[0] < ttl:
+        return hit[1]
+    try:
+        from .store import store
+        rows = store().conn.execute(
+            "select bar_time, count(*) n from kline_cache where klt=101 and fqt=1 "
+            "group by bar_time order by bar_time desc limit 8").fetchall()
+        out = ""
+        for r in rows:
+            if int(r["n"] or 0) >= int(min_codes):
+                out = str(r["bar_time"])
+                break
+        _complete_day_cache[int(min_codes)] = (now, out)
+        return out
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _cache_put(code: str, klt: int, fqt: int, bars: list[dict]) -> None:
     try:
         from .store import store

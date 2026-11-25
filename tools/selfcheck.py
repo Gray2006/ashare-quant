@@ -55,9 +55,13 @@ def check_db() -> None:
 
         # 最近 5 个交易日的每日覆盖 —— 只看总数会被「历史很全、最近很空」骗过。
         # 2026-11-25 就是这么发现的:11-18 之前每天 5226 只,之后只剩 778 只。
+        # 排除不完整的日子(盘中只有零星几只落库),统一走 complete_day 的口径
+        from quantlab.data.kline import complete_day
+        done_day = complete_day()
         days = c.execute(
             "select bar_time, count(*) n from kline_cache where klt=101 and fqt=1 "
-            "group by bar_time order by bar_time desc limit 5").fetchall()
+            "and bar_time <= ? group by bar_time order by bar_time desc limit 5",
+            (done_day or today,)).fetchall()
         thin = [(r["bar_time"], r["n"]) for r in days if r["n"] < 3000]
         if thin:
             mark(WARN, "最近几日覆盖",

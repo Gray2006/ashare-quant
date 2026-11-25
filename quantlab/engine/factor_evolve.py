@@ -30,9 +30,8 @@ def _data_day() -> str:
     """日线数据的最新日期 —— 审计结果的「数据指纹」。"""
     try:
         from ..data.store import store
-        row = store().conn.execute(
-            "select max(bar_time) from kline_cache where klt=101 and fqt=1").fetchone()
-        day = str(row[0] or "") if row else ""
+        from ..data.kline import complete_day
+        day = complete_day()
         if not day:
             return ""
         # 带上当日的覆盖数:盘中只有十几只落库,补全后五千多只,

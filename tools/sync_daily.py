@@ -31,10 +31,10 @@ def latest_by_code() -> tuple[str, dict[str, str]]:
     盘中只有十几只票落库,那一行就是今天,拿它当基准会把其余五千多只
     全判成「落后」,白跑一遍。
     """
-    from quantlab.data.kline import _last_trade_day
+    from quantlab.data.kline import complete_day
     from quantlab.data.store import store
     c = store().conn
-    day = _last_trade_day()
+    day = complete_day() or ""
     rows = c.execute(
         "select code, max(bar_time) d from kline_cache where klt=101 and fqt=1 "
         "group by code").fetchall()
