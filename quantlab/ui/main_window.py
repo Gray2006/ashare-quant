@@ -37,7 +37,6 @@ from .macro_page import MacroPage
 from .patterns_page import PatternPage
 from .quote_page import QuotePage
 from .review_page import ReviewPage
-from .organism_page import OrganismPage
 from .screen_page import ScreenPage
 from .sector_page import SectorPage
 from .settings_page import SettingsPage
@@ -96,7 +95,6 @@ NAV_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
     ("管理", [
         ("复盘", "review", "已实现盈亏 · 纪律检查 · 按标的与按日归因"),
         ("学习", "learn", "私有自适应学习 · 今日日报 · 参数建议 · 预测准确率"),
-        ("机体", "organism", "学习程度 · 能力雷达 · 训练曲线 · 进化时间线"),
         ("数据健康", "health", "数据源状态 · 熔断明细 · 各领域数据新鲜度"),
         ("设置", "settings", "刷新频率、风控硬闸、同花顺通道、OKX 密钥"),
     ]),
@@ -213,7 +211,6 @@ class MainWindow(QMainWindow):
         "forecast": ForecastPage, "pick": PickPage, "risk": RiskBandPage,
         "pattern": PatternPage, "ta": TAPage, "grid": GridPage,
         "world": WorldPage, "news": NewsPage, "trade": TradePage,
-        "organism": OrganismPage,
         "alert": AlertPage, "review": ReviewPage, "crypto": CryptoPage,
         "cryptoq": CryptoQuantPage,
         "health": HealthPage, "settings": SettingsPage, "learn": LearnPage,
