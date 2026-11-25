@@ -24,7 +24,14 @@ from . import dsl
 from . import factor_analysis as fa
 
 RESULT_DIR = USER_DIR / "factor_mine"
+CRYPTO_SYMBOLS = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
+                  "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT",
+                  "LTCUSDT", "BCHUSDT", "TRXUSDT", "TONUSDT", "SUIUSDT",
+                  "APTUSDT", "ARBUSDT", "OPUSDT", "NEARUSDT", "FILUSDT")
+
 LIBRARY = USER_DIR / "factor_library.json"
+
+# 表达式模板:{n} 是窗口。方向不预设,IC 正负由数据说话。
 TEMPLATES: list[tuple[str, str]] = [
     ("动量", "roc(close,{n})"),
     ("反转", "-roc(close,{n})"),
@@ -59,8 +66,54 @@ def candidates(windows: tuple[int, ...] = WINDOWS) -> list[dict]:
     return out
 
 
+def _crypto_panel(days: int = 250) -> dict:
+    """加密日线:宽表格式和 A 股一致(close/volume/... dates×codes)。"""
+    from ..crypto import feed
+
+    frames = {}
+    for sym in CRYPTO_SYMBOLS:
+        try:
+            rows = feed.klines(sym, "1d", limit=int(days))
+        except Exception:  # noqa: BLE001
+            continue
+        if not rows:
+            continue
+        df = pd.DataFrame(rows)
+        df.index = pd.to_datetime(df["t"], unit="ms").dt.normalize()
+        frames[sym] = df[["o", "h", "l", "c", "v"]].rename(
+            columns={"o": "open", "h": "high", "l": "low", "c": "close",
+                     "v": "volume"}).astype("float64")
+    if not frames:
+        return {}
+    # 有的币种会返回很早的一段(缓存/接口异常),和最新日期差太远就剔掉,
+    # 否则 union 出两段不相交日期,覆盖率直接腰斩。
+    newest = max(df.index.max() for df in frames.values())
+    frames = {k: v for k, v in frames.items()
+              if v.index.max() >= newest - pd.Timedelta(days=5)}
+    if not frames:
+        return {}
+    idx = sorted(set().union(*[set(df.index) for df in frames.values()]))
+    # 只保留覆盖率 >= 30% 的日期(去掉个别币种停牌造成的空段)
+    cov = pd.Series(0, index=pd.DatetimeIndex(idx))
+    for df in frames.values():
+        cov = cov.add(df.index.to_series().value_counts(), fill_value=0)
+    keep_idx = cov[cov >= max(3, int(len(frames) * 0.3))].index
+    idx = sorted(keep_idx)
+    if not idx:
+        return {}
+    out = {}
+    for name in ("open", "high", "low", "close", "volume"):
+        out[name] = pd.DataFrame({sym: df[name].reindex(idx)
+                                  for sym, df in frames.items()}).reindex(idx)
+    out["amount"] = out["close"] * out["volume"]
+    out["codes"] = list(frames)
+    out["last_day"] = str(idx[-1].date())
+    return out
+
+
 def _panel(days: int, max_stocks: int, market: str = "a") -> dict:
-    """公开版只有 A 股。"""
+    if market == "crypto":
+        return _crypto_panel(days)
     from .alpha_pick import load_panel
     return load_panel(days=days, max_stocks=max_stocks)
 
@@ -180,7 +233,13 @@ def _metrics(fac: pd.DataFrame, fwd: pd.DataFrame, horizon: int) -> dict:
     fold_means = [float(f.mean()) if len(f) >= 10 else 0.0 for f in folds]
     same_sign = sum(1 for m in fold_means if m * tr_m > 0 and abs(m) >= 0.01)
     stability = round(same_sign / 3.0, 2)
-    oos_ok = ((tr_m > 0) == (te_m > 0)) and abs(te_m) >= 0.015 and len(te) >= 15
+    # 样本外门槛。原来的版本只看测试段(|te_m| ≥ 0.015),结果「训练 IC 0.012、
+    # 测试 IC 0.10」这种也能过 —— 测试段只有 30% 的时间,IC 偶然冲高很常见。
+    # 现在要求:训练段也得有东西、测试段不能远超训练(超过 3 倍 + 0.02 视为不稳)。
+    same_dir = (tr_m > 0) == (te_m > 0)
+    oos_ok = (same_dir and abs(te_m) >= 0.015 and abs(tr_m) >= 0.010
+              and len(te) >= 15
+              and abs(te_m) <= 3.0 * abs(tr_m) + 0.02)
     if oos_ok and stability >= 0.66 and abs(te_ir) >= 0.2:
         risk = "低"
     elif oos_ok:
@@ -422,7 +481,7 @@ def auto_due(market: str, today: str | None = None) -> bool:
     return str(doc.get("date") or "") != today
 
 
-def run_daily(markets: tuple[str, ...] = ("a",), days: int = 250,
+def run_daily(markets: tuple[str, ...] = ("a", "crypto"), days: int = 250,
               max_stocks: int = 300, horizon: int = 5) -> dict:
     """启动时调用:每个市场每天最多跑一次,结果落盘。"""
     out = {}
