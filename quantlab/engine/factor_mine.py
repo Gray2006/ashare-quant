@@ -111,11 +111,32 @@ def _crypto_panel(days: int = 250) -> dict:
     return out
 
 
-def _panel(days: int, max_stocks: int, market: str = "a") -> dict:
+def _panel(days: int, max_stocks: int, market: str = "a",
+           asof: str | None = None) -> dict:
+    """取横截面面板。
+
+    asof:按哪一天的成交额选票。默认 None = 最近一天(选股/看盘)。
+          **回测要传样本起点** —— 用今天的成交额挑历史池子是幸存者偏差,
+          池子里全是后来变热的票,天然跑赢基准。
+    """
     if market == "crypto":
         return _crypto_panel(days)
     from .alpha_pick import load_panel
-    return load_panel(days=days, max_stocks=max_stocks)
+    return load_panel(days=days, max_stocks=max_stocks, asof=asof)
+
+
+def _panel_unbiased(days: int, max_stocks: int, market: str = "a") -> dict:
+    """按**样本起点**的成交额选池子,避免用今天的温度挑历史票。
+
+    用今天的前 N 名去回测过去 N 天,池子里全是一路变热的票,天然跑赢基准。
+    实测同一组因子:有偏 +120.7% 超额,无偏 -22.4%。
+    """
+    base = _panel(days, max_stocks, market)
+    close = base.get("close") if isinstance(base, dict) else None
+    if close is None or close.empty:
+        return base
+    first = str(close.index[0])[:10]
+    return _panel(days, max_stocks, market, asof=first)
 
 
 def _is_wide(panel: dict) -> bool:
@@ -271,7 +292,7 @@ def mine(days: int = 250, max_stocks: int = 300, horizon: int = 5,
          max_corr: float = 0.7, top: int = 30,
          windows: tuple[int, ...] = WINDOWS, market: str = "a") -> dict:
     """跑一批候选,返回排序 + 去重后的入选名单。"""
-    panel = _panel(days, max_stocks, market)
+    panel = _panel_unbiased(days, max_stocks, market)
     if not panel:
         return {"ok": False, "error": "本地没有 K 线数据,先让行情页拉一段历史",
                 "rows": []}
@@ -446,6 +467,16 @@ def composite_backtest(panel: dict, factors: list[dict], horizon: int = 5,
     for v in eq:
         peak = max(peak, float(v))
         mdd = min(mdd, float(v) / peak - 1.0)
+
+    # 基准:同期全池等权(buy & hold,不调仓不扣费)。
+    # 没有它,「总收益 131%」这种数字看不出多少是 beta ——
+    # 一段普涨行情里任何策略都能赚,只有超额才是策略的功劳。
+    bench_eq = (1.0 + rets.mean(axis=1)).cumprod()
+    bench_total = float(bench_eq.iloc[-1] - 1.0) * 100 if len(bench_eq) else 0.0
+    excess_total = total - bench_total
+    bench_annual = ((1 + bench_total / 100) ** (252 / n) - 1) * 100 if n > 5 else bench_total
+    excess_annual = annual - bench_annual
+
     return {
         "ok": True,
         "curve": curve,
@@ -457,7 +488,12 @@ def composite_backtest(panel: dict, factors: list[dict], horizon: int = 5,
                     "n_days": n, "top_n": int(top_n),
                     "horizon": int(horizon), "cost": float(cost),
                     "oos_return_pct": round(oos_ret, 2),
-                    "oos_sharpe": round(oos_sharpe, 2)},
+                    "oos_sharpe": round(oos_sharpe, 2),
+                    # 基准与超额:只看绝对收益会被 beta 骗
+                    "bench_total_pct": round(bench_total, 2),
+                    "bench_annual_pct": round(bench_annual, 2),
+                    "excess_total_pct": round(excess_total, 2),
+                    "excess_annual_pct": round(excess_annual, 2)},
         "holdings": holdings,
     }
 

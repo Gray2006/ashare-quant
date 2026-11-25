@@ -107,9 +107,15 @@ def _db():
 # ==================================================================== 面板
 
 def load_panel(days: int = DAYS, max_stocks: int = MAX_STOCKS,
-               min_bars: int = MIN_BARS) -> dict:
-    """一次读出日线横截面,只保留成交额前 max_stocks 只。"""
-    key = (int(days), int(max_stocks), int(min_bars))
+               min_bars: int = MIN_BARS, asof: str | None = None) -> dict:
+    """一次读出日线横截面,只保留成交额前 max_stocks 只。
+
+    asof 决定「按哪一天的成交额选票」:
+      None               最近一个交易日 —— 选股/看盘用这个
+      'YYYY-MM-DD'       指定日 —— **回测必须传样本起点**,
+                         否则是拿今天的成交额去挑历史池子(幸存者偏差)
+    """
+    key = (int(days), int(max_stocks), int(min_bars), asof)
     hit = _PANEL_CACHE.get(key)
     if hit is not None:
         return hit
@@ -133,7 +139,9 @@ def load_panel(days: int = DAYS, max_stocks: int = MAX_STOCKS,
         "AND length(code)=6 AND substr(code,1,1) IN ('0','3','6') "
         "AND close IS NOT NULL ORDER BY av DESC LIMIT ?")
     codes: list[str] = []
-    for day in sorted(dts, reverse=True)[:6]:
+    # 回测传了 asof 就按那一天的成交额选票,不碰「最近几天」
+    pick_days = ([asof] if asof else sorted(dts, reverse=True)[:6])
+    for day in pick_days:
         got = st.conn.execute(cand_sql, (day, int(max_stocks) * 2)).fetchall()
         codes = [r["code"] for r in got if r["code"]]
         if len(codes) >= int(max_stocks):
