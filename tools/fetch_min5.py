@@ -73,15 +73,22 @@ def top_liquid(n: int, offset: int = 0, skip_fetched: bool = False) -> list[str]
                   不加 offset 会反复抓同一批,白跑。
     skip_fetched  跳过已经有 5 分钟线的票。
     """
+    from quantlab.data.kline import complete_day
+
     st = store()
-    day = st.conn.execute(
-        "select max(bar_time) from kline_cache where klt=101 and fqt=1").fetchone()[0]
+    # 用 complete_day 而不是 max(bar_time):盘中只有十几只票落库,
+    # 拿今天当基准选不出票(踩过一次)。
+    day = complete_day()
     if not day:
         return []
     rows = st.conn.execute(
         "select code, sum(coalesce(amount,0)) amt from kline_cache "
-        "where klt=101 and fqt=1 and bar_time=? group by code "
-        "order by amt desc limit ? offset ?", (day, n, int(offset))).fetchall()
+        "where klt=101 and fqt=1 and bar_time=? "
+        # 只取 6 位股票代码:idx:399001 这类指数伪代码成交额最大,
+        # 不过滤的话永远排在最前面(踩过一次)
+        "and length(code)=6 and substr(code,1,1) in ('0','3','6') "
+        "group by code order by amt desc limit ? offset ?",
+        (day, n, int(offset))).fetchall()
     codes = [r["code"] for r in rows if r["amt"] and r["amt"] > 0]
     if skip_fetched:
         have = {r[0] for r in st.conn.execute(

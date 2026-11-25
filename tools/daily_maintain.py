@@ -117,12 +117,46 @@ def step_verify(fp) -> None:
         log(f"  失败:{type(e).__name__}: {str(e)[:100]}", fp)
 
 
+def step_min5(fp, top: int = 300) -> None:
+    """补 5 分钟线。日内因子和做T参数学习都靠它。"""
+    log(f"⑤ 补 5 分钟线(成交额前 {top} 只)…", fp)
+    try:
+        import time as _t
+
+        from tools.fetch_min5 import fetch, top_liquid
+
+        from quantlab.data.store import store
+
+        codes = top_liquid(top, skip_fetched=False)
+        if not codes:
+            log("  取不到票列表", fp)
+            return
+        st = store()
+        ok, fail = 0, 0
+        for i, code in enumerate(codes, 1):
+            try:
+                bars = fetch(code)
+                if bars:
+                    st.save_kline(code, 5, 1, bars)
+                    ok += 1
+            except Exception:  # noqa: BLE001
+                fail += 1
+            if i % 50 == 0:
+                log(f"  {i}/{len(codes)} 成功 {ok} 失败 {fail}", fp)
+            _t.sleep(0.25)
+        log(f"  完成:{ok}/{len(codes)}", fp)
+    except Exception as e:  # noqa: BLE001
+        log(f"  失败:{type(e).__name__}: {str(e)[:120]}", fp)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--skip-snapshot", action="store_true")
     ap.add_argument("--skip-lhb", action="store_true")
     ap.add_argument("--skip-factors", action="store_true")
     ap.add_argument("--skip-verify", action="store_true")
+    ap.add_argument("--skip-min5", action="store_true")
+    ap.add_argument("--min5-top", type=int, default=300)
     ap.add_argument("--factor-limit", type=int, default=8)
     args = ap.parse_args()
 
@@ -139,6 +173,8 @@ def main() -> int:
             step_factors(fp, args.factor_limit)
         if not args.skip_verify:
             step_verify(fp)
+        if not args.skip_min5:
+            step_min5(fp, args.min5_top)
         log("完成", fp)
         return 0
     finally:
