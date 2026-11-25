@@ -111,6 +111,12 @@ def main() -> int:
               f"{f(r['neu_excess'], '+.3%'):>9} {f(r['neu_t'], '+.2f'):>7}"
               + ("  ← 新" if r["new"] else ""))
 
+    # 多重比较校正:测的因子越多,「撞上显著」越容易
+    from quantlab.engine import multiple_testing as mt
+    fdr = mt.fdr_report([r["raw_t"] for r in rows])
+    log(f"  {fdr['verdict']}")
+    out_fdr = fdr
+
     newrows = [r for r in rows if r["new"]]
     if newrows:
         print("\n=== 新加的 7 条模板 ===")
@@ -124,7 +130,8 @@ def main() -> int:
     out = {"generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
            "days": args.days, "max_stocks": args.max_stocks,
            "horizon": args.horizon, "n": len(rows),
-           "both_significant": len(both), "rows": rows}
+           "both_significant": len(both), "rows": rows,
+           "fdr": out_fdr}
     rep_dir = ROOT / "reports"
     rep_dir.mkdir(exist_ok=True)
     stem = time.strftime("factor-audit-%Y-%m-%d")
