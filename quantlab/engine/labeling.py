@@ -50,11 +50,15 @@ def triple_barrier(highs, lows, closes, entry: float, tp: float, sl: float,
 
 
 def label_panel(panel: dict, horizon: int = 5, tp: float = 0.05,
-                sl: float = 0.03) -> dict[str, np.ndarray]:
+                sl: float = 0.03, t1: bool = True) -> dict[str, np.ndarray]:
     """给整个面板打三重障碍标签。
 
     返回 {"label": 标签矩阵, "ret": 实现收益矩阵},形状同 close。
     第 t 行第 j 列 = 在第 t 天收盘后入场、看未来 horizon 天的结果。
+
+    t1=True(默认)按 A 股 T+1 建模:第 t+1 天是买入当天,**不能卖**,
+    所以止盈止损从第 t+2 天才开始判。t1=False 是旧口径(当天就能卖),
+    只用来做对比。
     """
     close = panel.get("close")
     high = panel.get("high")
@@ -74,9 +78,14 @@ def label_panel(panel: dict, horizon: int = 5, tp: float = 0.05,
             entry = c[i, j]
             if not np.isfinite(entry) or entry <= 0:
                 continue
-            end = min(rows, i + 1 + horizon)
-            lab, ret = triple_barrier(h[i + 1:end, j], lo[i + 1:end, j],
-                                      c[i + 1:end, j], entry, tp, sl, horizon)
+            # T+1:买入当天(i+1)不能卖,障碍从 i+2 开始判
+            start = i + 2 if t1 else i + 1
+            end = min(rows, start + horizon)
+            if start >= end:
+                continue
+            lab, ret = triple_barrier(h[start:end, j], lo[start:end, j],
+                                      c[start:end, j], entry, tp, sl,
+                                      end - start)
             labels[i, j] = lab
             rets[i, j] = ret
     return {"label": labels, "ret": rets}
