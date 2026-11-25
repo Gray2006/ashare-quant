@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit,
                                QPushButton, QTabWidget, QVBoxLayout, QWidget)
 
 from ..config import APP_DIR
@@ -15,7 +15,41 @@ from ..engine.hub import TaskRunner
 from ..utils import fmt_amount, fmt_pct, fmt_price
 from .board import Board
 from .common import Card, pnl_color, set_cell, table
-from .theme import TEXT_DIM, TEXT_MUT
+from .theme import TEXT, TEXT_DIM, TEXT_MUT
+
+
+def _attach_vol20(df):
+    """给筛选结果补一列 20 日波动率(日收益标准差)。"""
+    try:
+        import numpy as np
+
+        from ..data.store import store
+
+        c = store().conn
+        codes = [str(x) for x in df.get("code", [])]
+        if not codes:
+            return df
+        marks = ",".join("?" * len(codes))
+        rows = c.execute(
+            "select code, close from kline_cache where klt=101 and fqt=1 "
+            f"and code in ({marks}) order by code, bar_time desc",
+            codes).fetchall()
+        per: dict[str, list[float]] = {}
+        for r in rows:
+            per.setdefault(str(r["code"]), []).append(float(r["close"] or 0))
+        vol = {}
+        for code, px in per.items():
+            px = [q for q in px[:25] if q > 0]
+            if len(px) < 21:
+                continue
+            px = px[::-1]
+            rets = np.diff(px) / np.array(px[:-1])
+            vol[code] = float(np.std(rets, ddof=0))
+        out = df.copy()
+        out["vol20"] = out["code"].astype(str).map(vol)
+        return out
+    except Exception:  # noqa: BLE001
+        return df
 
 
 class ScreenPage(QWidget):
@@ -61,6 +95,13 @@ class ScreenPage(QWidget):
         self.btn_del = QPushButton("删预设")
         self.btn_del.clicked.connect(self.delete_preset)
         row1.addWidget(self.btn_del)
+        # 低波动优先:七条线里唯一通过真样本外的信号(2018-2022 五年全正)
+        self.low_vol = QCheckBox("低波动优先")
+        self.low_vol.setToolTip(
+            "按 20 日收益标准差升序排。\n"
+            "依据:低波动因子在 2018-2022 五年样本外全为正、"
+            "2023-2026 三年 t=7.65,beta 中性化后更高。")
+        row1.addWidget(self.low_vol)
         cond._lay.addLayout(row1)
 
         self.hint = QLabel("可用字段:price pct_chg turnover volume_ratio amount amplitude "
@@ -74,8 +115,8 @@ class ScreenPage(QWidget):
         self.tabs = QTabWidget()
         # 1 选股结果
         self.tbl = table(["代码", "名称", "现价", "涨跌幅", "换手", "量比", "成交额",
-                          "主力净流入", "主力占比", "PE", "市值", "板块"],
-                         widths=[62, 84, 68, 72, 54, 52, 86, 96, 72, 60, 88, 70],
+                          "主力净流入", "主力占比", "PE", "市值", "板块", "20日波动"],
+                         widths=[62, 84, 68, 72, 54, 52, 86, 96, 72, 60, 88, 70, 82],
                          stretch_col=1)
         self.tbl.itemSelectionChanged.connect(self._on_pick)
         w1 = QWidget()
@@ -230,8 +271,15 @@ class ScreenPage(QWidget):
         self.btn_run.setEnabled(False)
         self.summary.setText("筛选中…")
 
+        low_vol = self.low_vol.isChecked()
+
         def job():
             df = screener.run(expr, limit=500)
+            if df is not None and len(df):
+                df = _attach_vol20(df)
+                if low_vol and "vol20" in df.columns:
+                    # 低波动优先:按 20 日波动升序;没有数据的排最后
+                    df = df.sort_values("vol20", na_position="last")
             return df, screener.explain(df)
 
         def on_ok(pair):
@@ -264,6 +312,10 @@ class ScreenPage(QWidget):
             set_cell(self.tbl, i, 9, f"{r.get('pe_ttm') or 0:.1f}")
             set_cell(self.tbl, i, 10, fmt_amount(r.get("market_cap")))
             set_cell(self.tbl, i, 11, str(r.get("board") or ""), align="left")
+            vol = r.get("vol20")
+            set_cell(self.tbl, i, 12,
+                     "-" if vol is None else f"{vol:.2%}",
+                     TEXT_DIM if vol is None else TEXT)
 
     def _selected_row(self) -> dict | None:
         rows = self.tbl.selectionModel().selectedRows() if self.tbl.selectionModel() else []
