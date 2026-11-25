@@ -52,6 +52,20 @@ def check_db() -> None:
         today = time.strftime("%Y-%m-%d")
         mark(OK if last and last >= today[:8] else WARN, "日线新鲜度",
              f"最新 {last} / 今天 {today}")
+
+        # 最近 5 个交易日的每日覆盖 —— 只看总数会被「历史很全、最近很空」骗过。
+        # 2026-11-25 就是这么发现的:11-18 之前每天 5226 只,之后只剩 778 只。
+        days = c.execute(
+            "select bar_time, count(*) n from kline_cache where klt=101 and fqt=1 "
+            "group by bar_time order by bar_time desc limit 5").fetchall()
+        thin = [(r["bar_time"], r["n"]) for r in days if r["n"] < 3000]
+        if thin:
+            mark(WARN, "最近几日覆盖",
+                 "; ".join(f"{d}={n}" for d, n in thin)
+                 + " (<3000 只,跑 tools/sync_snapshot.py 补)")
+        else:
+            mark(OK, "最近几日覆盖",
+                 " ".join(f"{str(r['bar_time'])[5:]}={r['n']}" for r in days))
     except Exception as e:  # noqa: BLE001
         mark(BAD, "kline_cache", str(e)[:60])
 

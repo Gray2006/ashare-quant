@@ -66,8 +66,13 @@ def fetch(code: str, datalen: int = 1023) -> list[dict]:
     return bars
 
 
-def top_liquid(n: int) -> list[str]:
-    """按最近一个交易日的成交额取流动性最好的 n 只(只取有日线的)。"""
+def top_liquid(n: int, offset: int = 0, skip_fetched: bool = False) -> list[str]:
+    """按最近一个交易日的成交额取流动性好的 n 只(只取有日线的)。
+
+    offset        跳过前多少名。库里已有的那批通常就是成交额最大的,
+                  不加 offset 会反复抓同一批,白跑。
+    skip_fetched  跳过已经有 5 分钟线的票。
+    """
     st = store()
     day = st.conn.execute(
         "select max(bar_time) from kline_cache where klt=101 and fqt=1").fetchone()[0]
@@ -76,8 +81,13 @@ def top_liquid(n: int) -> list[str]:
     rows = st.conn.execute(
         "select code, sum(coalesce(amount,0)) amt from kline_cache "
         "where klt=101 and fqt=1 and bar_time=? group by code "
-        "order by amt desc limit ?", (day, n)).fetchall()
-    return [r["code"] for r in rows if r["amt"] and r["amt"] > 0]
+        "order by amt desc limit ? offset ?", (day, n, int(offset))).fetchall()
+    codes = [r["code"] for r in rows if r["amt"] and r["amt"] > 0]
+    if skip_fetched:
+        have = {r[0] for r in st.conn.execute(
+            "select distinct code from kline_cache where klt=5 and fqt=1")}
+        codes = [c for c in codes if c not in have]
+    return codes
 
 
 def main() -> int:
@@ -86,11 +96,15 @@ def main() -> int:
     ap.add_argument("--datalen", type=int, default=1023)
     ap.add_argument("--sleep", type=float, default=0.6)
     ap.add_argument("--top", type=int, default=0, help="按成交额取前 N 只")
+    ap.add_argument("--offset", type=int, default=0, help="从第几名开始取")
+    ap.add_argument("--skip-fetched", action="store_true",
+                    help="跳过已经有 5 分钟线的票")
     args = ap.parse_args()
     codes = [c.strip() for c in (args.codes or "").split(",") if c.strip()]
     if not codes and args.top > 0:
-        codes = top_liquid(args.top)
-        print(f"按成交额取 {len(codes)} 只", flush=True)
+        codes = top_liquid(args.top, offset=args.offset,
+                           skip_fetched=args.skip_fetched)
+        print(f"按成交额取 {len(codes)} 只(offset={args.offset})", flush=True)
     if not codes:
         codes = DEFAULT_CODES
 
