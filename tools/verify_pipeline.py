@@ -30,11 +30,17 @@ def log(msg: str) -> None:
 
 
 def main() -> int:
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--quick", action="store_true",
+                    help="只跑「偷看未来」那一项,约 1 分钟")
+    ap.add_argument("--max-stocks", type=int, default=300)
+    args = ap.parse_args()
     from quantlab.engine import factor_analysis as fa
     from quantlab.engine import factor_mine as fm
 
     log("取面板…")
-    panel = fm._panel(days=250, max_stocks=300, market="a")
+    panel = fm._panel(days=250, max_stocks=args.max_stocks, market="a")
     frames = fm._frames(panel)
     close = panel["close"]
     log(f"面板 {close.shape}")
@@ -48,6 +54,13 @@ def main() -> int:
     rep_a = fa.audit_scores(frames, scores_a, horizon=5)
     ra = rep_a.get("raw") or {}
     log(f"A 偷看未来   原始超额 {ra.get('excess_mean'):+.4%} t={ra.get('excess_t')}")
+
+    if args.quick:
+        print("\n[quick] 只验证「偷看未来能被识别」")
+        ta0 = ra.get("excess_t") or -9
+        print(f"A 偷看未来 t={ta0:.2f} -> "
+              + ("正常" if ta0 > 5 else "管道可能有问题"))
+        return 0 if ta0 > 5 else 1
 
     # B:反向
     scores_b = -fwd.copy()

@@ -89,11 +89,27 @@ def step_factors(fp, limit: int = 8) -> None:
         log(f"  失败:{type(e).__name__}: {str(e)[:120]}", fp)
 
 
+def step_verify(fp) -> None:
+    log("④ 管道自检(偷看未来的因子应该被识别)…", fp)
+    try:
+        from quantlab.engine import factor_analysis as fa
+        from quantlab.engine import factor_mine as fm
+        panel = fm._panel(days=200, max_stocks=200, market="a")
+        frames = fm._frames(panel)
+        fwd = fm._fwd_panel(panel, 5)
+        rep = fa.audit_scores(frames, fwd, horizon=5)
+        t = (rep.get("raw") or {}).get("excess_t") or -9
+        log(f"  偷看未来 t={t:.2f} -> " + ("正常" if t > 5 else "⚠ 管道可能有问题"), fp)
+    except Exception as e:  # noqa: BLE001
+        log(f"  失败:{type(e).__name__}: {str(e)[:100]}", fp)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--skip-snapshot", action="store_true")
     ap.add_argument("--skip-lhb", action="store_true")
     ap.add_argument("--skip-factors", action="store_true")
+    ap.add_argument("--skip-verify", action="store_true")
     ap.add_argument("--factor-limit", type=int, default=8)
     args = ap.parse_args()
 
@@ -108,6 +124,8 @@ def main() -> int:
             step_lhb(fp)
         if not args.skip_factors:
             step_factors(fp, args.factor_limit)
+        if not args.skip_verify:
+            step_verify(fp)
         log("完成", fp)
         return 0
     finally:

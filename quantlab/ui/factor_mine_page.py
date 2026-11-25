@@ -280,8 +280,10 @@ class _MarketPanel(QWidget):
         self.s_ann = StatCard("年化", "-")
         self.s_sharpe = StatCard("夏普", "-")
         self.s_mdd = StatCard("最大回撤", "-")
-        self.s_oos = StatCard("样本外收益", "-")
-        self.s_oos_sharpe = StatCard("样本外夏普", "-")
+        # 只看绝对收益会被 beta 骗:一段普涨行情里任何策略都赚。
+        # 这两个卡是「同期全池等权」和「相对它的超额」。
+        self.s_oos = StatCard("超额收益", "-")
+        self.s_oos_sharpe = StatCard("同期基准", "-")
         for i, w in enumerate((self.s_ret, self.s_ann, self.s_sharpe,
                                self.s_mdd, self.s_oos, self.s_oos_sharpe)):
             grid.addWidget(w, i // 3, i % 3)
@@ -409,7 +411,8 @@ class _MarketPanel(QWidget):
                f"{d.get('n_candidates')} 个候选 · "
                f"{d.get('rounds')} 轮 · {d.get('cost_seconds')}s")
         if not sel:
-            msg += " · 本次没有因子通过样本外,建议加长历史或扩大股票池"
+            msg += (" · 没有因子通过样本外门槛(训练 IC≥0.010、测试 IC≥0.015、"
+                    "测试不超训练 3 倍+0.02)。在日线数据上这是常态,不是 bug")
         self.hint.setText(msg)
         if self.loop.isChecked() and not self._stop_event.is_set():
             QTimer.singleShot(10000, self.run)
@@ -465,14 +468,16 @@ class _MarketPanel(QWidget):
         self.s_sharpe.set(_fmt(m.get("sharpe"), "+.2f"),
                           pnl_color(m.get("sharpe")))
         self.s_mdd.set(_fmt(m.get("max_drawdown_pct"), ".1f") + "%", DOWN)
-        self.s_oos.set(_fmt(m.get("oos_return_pct"), "+.1f") + "%",
-                       pnl_color(m.get("oos_return_pct")))
-        self.s_oos_sharpe.set(_fmt(m.get("oos_sharpe"), "+.2f"),
-                              pnl_color(m.get("oos_sharpe")))
+        self.s_oos.set(_fmt(m.get("excess_total_pct"), "+.1f") + "%",
+                       pnl_color(m.get("excess_total_pct")))
+        self.s_oos_sharpe.set(_fmt(m.get("bench_total_pct"), "+.1f") + "%",
+                              pnl_color(m.get("bench_total_pct")))
+        # 池子是按「样本起点」的成交额选的,不是按今天 —— 否则是幸存者偏差。
+        # 超额和基准放在卡上,样本外数据放这行提示里。
         self.bt_hint.setText(
             f'{m.get("n_days")} 天 · 换手 {m.get("turnover_avg")} · '
-            f'成本 {m.get("cost")} · 最新持有:'
-            f'{"、".join((d.get("holdings") or [])[:5])}')
+            f'成本 {m.get("cost")} · 样本外 {_fmt(m.get("oos_return_pct"), "+.1f")}%'
+            f' · 最新持有:{"、".join((d.get("holdings") or [])[:5])}')
 
     # ------------------------------------------------------------------ 取用
     def _combo_expr(self, rows: list[dict]) -> str:
