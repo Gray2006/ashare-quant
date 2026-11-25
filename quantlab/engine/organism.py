@@ -46,9 +46,33 @@ def data_stats() -> dict:
                 fin_n = len(json.loads(fin.read_text(encoding="utf-8")))
             except Exception:  # noqa: BLE001
                 fin_n = 0
+
+        # 最近每天有多少只票的数据 —— 这就是「每天新进来多少」
+        recent = []
+        rows = c.execute(
+            "select bar_time d, count(*) n from kline_cache "
+            "where klt=101 and fqt=1 group by bar_time "
+            "order by bar_time desc limit 10").fetchall()
+        for r in rows:
+            recent.append({"day": str(r["d"]), "codes": int(r["n"])})
+        recent.reverse()
+        # 5 分钟线最近几天
+        m5 = []
+        rows2 = c.execute(
+            "select substr(bar_time,1,10) d, count(distinct code) n "
+            "from kline_cache where klt=5 and fqt=1 "
+            "group by substr(bar_time,1,10) order by d desc limit 7").fetchall()
+        for r in rows2:
+            m5.append({"day": str(r["d"]), "codes": int(r["n"])})
+        m5.reverse()
+
+        first = c.execute(
+            "select min(bar_time) from kline_cache where klt=101 and fqt=1"
+        ).fetchone()[0]
         return {"daily_bars": int(daily), "codes": int(codes),
                 "min5_codes": int(min5), "finance_codes": fin_n,
-                "last_day": str(last or "")}
+                "last_day": str(last or ""), "first_day": str(first or ""),
+                "recent_days": recent, "min5_days": m5}
     except Exception:  # noqa: BLE001
         return {}
 
@@ -219,10 +243,40 @@ def train_demo(epochs: int = 60, lr: float = 0.35) -> dict:
 
     base = float(max(Yte.mean(), 1 - Yte.mean()))
     final = curve[-1]
+
+    # 混淆矩阵 + AUC:准确率会被类别不平衡骗(基线 0.72 就是「全猜负类」),
+    # 这两样才看得出「有没有真的区分能力」
+    zz = Xte @ w + b0
+    prob = 1.0 / (1.0 + np.exp(-np.clip(zz, -30, 30)))
+    pred = (prob > 0.5).astype("float64")
+    tp = int(((pred == 1) & (Yte == 1)).sum())
+    fp = int(((pred == 1) & (Yte == 0)).sum())
+    fn = int(((pred == 0) & (Yte == 1)).sum())
+    tn = int(((pred == 0) & (Yte == 0)).sum())
+    prec = tp / (tp + fp) if (tp + fp) else 0.0
+    rec = tp / (tp + fn) if (tp + fn) else 0.0
+    f1 = 2 * prec * rec / (prec + rec) if (prec + rec) else 0.0
+
+    # AUC:按预测概率排序,正例排在负例前面的比例(梯形法)
+    order = np.argsort(prob)
+    ys = Yte[order]
+    n_pos = float((ys == 1).sum())
+    n_neg = float((ys == 0).sum())
+    auc = 0.0
+    if n_pos > 0 and n_neg > 0:
+        cum_pos = np.cumsum(ys == 1)
+        cum_neg = np.cumsum(ys == 0)
+        # 每个负例位置上的「已出现的正例数」求和
+        auc = float(np.sum(cum_pos[ys == 0])) / (n_pos * n_neg)
+
     out = {"ok": True, "n": int(n), "n_train": int(cut),
            "n_test": int(n - cut), "curve": curve,
            "final": final, "baseline": round(base, 4),
            "lift": round(final["test_acc"] - base, 4),
+           "confusion": {"tp": tp, "fp": fp, "fn": fn, "tn": tn},
+           "precision": round(prec, 4), "recall": round(rec, 4),
+           "f1": round(f1, 4), "auc": round(auc, 4),
+           "pos_rate": round(float(Yte.mean()), 4),
            "weights": [round(float(x), 4) for x in w],
            "bias": round(float(b0), 4),
            "at": time.strftime("%Y-%m-%d %H:%M:%S")}

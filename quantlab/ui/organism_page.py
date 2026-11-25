@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QW
 from ..engine import organism as og
 from .board import Board
 from .common import Card, StatCard, label, set_cell, table
-from .theme import BG, DOWN, TEXT, TEXT_DIM, TEXT_MUT, UP
+from .theme import BG, DOWN, TEXT, TEXT_MUT, UP
 
 CYAN = "#5ee7f0"
 VIOLET = "#a78bfa"
@@ -30,126 +30,157 @@ GREEN = "#34d399"
 RED = "#f87171"
 
 
-class _Radar(QWidget):
-    """七条线的能力雷达。发光的极坐标多边形。"""
+class _Ring(QWidget):
+    """能力分布环:通过 / 待跟 / 证否 三段弧 + 中心数字。
+
+    比雷达直观 —— 八条线里几条赢了、几条输了,一眼看到比例。
+    """
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumSize(300, 340)
-        self._vals: list[tuple[str, float, str]] = []
+        self.setMinimumHeight(150)
+        self._acc = 0
+        self._pen = 0
+        self._rej = 0
         self._phase = 0.0
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
-        self._timer.start(50)
+        self._timer.start(40)
 
-    def set_data(self, lines: list[dict]) -> None:
-        vals = []
-        for ln in lines:
-            st = ln.get("status")
-            v = {"accepted": 1.0, "pending": 0.55, "rejected": 0.22}.get(st, 0.3)
-            vals.append((str(ln.get("name") or ""), v, str(st)))
-        self._vals = vals
+    def set_data(self, acc: int, pen: int, rej: int) -> None:
+        self._acc, self._pen, self._rej = acc, pen, rej
         self.update()
 
     def _tick(self) -> None:
-        if self._vals:
-            self._phase = (self._phase + 0.035) % (2 * math.pi)
-            self.update()
+        self._phase = (self._phase + 0.02) % (2 * math.pi)
+        self.update()
 
     def paintEvent(self, _e) -> None:      # noqa: N802
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         w, h = self.width(), self.height()
+        total = max(1, self._acc + self._pen + self._rej)
+        size = min(w, h) - 24
+        if size < 40:
+            return
         cx, cy = w / 2, h / 2
-        r = min(w, h) * 0.25
-        n = len(self._vals)
-        if n < 3:
+        rect = QRectF(cx - size / 2, cy - size / 2, size, size)
+        thick = max(10, size * 0.16)
+
+        # 底环
+        p.setPen(QPen(QColor(255, 255, 255, 16), thick, Qt.SolidLine, Qt.FlatCap))
+        p.drawArc(rect.adjusted(thick / 2, thick / 2, -thick / 2, -thick / 2),
+                  0, 360 * 16)
+
+        # 三段弧:从 90° 开始顺时针
+        start_angle = 90 * 16
+        segs = [(self._acc, GREEN), (self._pen, AMBER),
+                (self._rej, RED)]
+        for cnt, col in segs:
+            if cnt <= 0:
+                continue
+            span = int(-360 * 16 * cnt / total)
+            p.setPen(QPen(QColor(col), thick, Qt.SolidLine, Qt.FlatCap))
+            p.drawArc(rect.adjusted(thick / 2, thick / 2, -thick / 2, -thick / 2),
+                      start_angle, span)
+            start_angle += span
+
+        # 中心数字(带呼吸)
+        glow = 0.85 + 0.15 * math.sin(self._phase)
+        p.setPen(QColor(int(230 * glow), int(240 * glow), int(250 * glow)))
+        f = p.font()
+        f.setPointSize(max(14, int(size * 0.2)))
+        f.setBold(True)
+        p.setFont(f)
+        p.drawText(rect, Qt.AlignCenter, f"{self._acc}/{total}")
+        f.setPointSize(8)
+        f.setBold(False)
+        p.setFont(f)
+        p.setPen(QPen(QColor(TEXT_MUT)))
+        p.drawText(QRectF(cx - size / 2, cy + size * 0.18, size, 16),
+                   Qt.AlignCenter, "通过")
+
+
+class _LineBars(QWidget):
+    """横向条形列表:每条线一行,条长表示进度,颜色表示状态。
+
+    比雷达图好读 —— 名字、结论、状态都能直接看见,不用猜颜色对应哪根轴。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumHeight(200)
+        self._rows: list[tuple[str, str, str, str]] = []
+
+    def set_data(self, lines: list[dict]) -> None:
+        rows = []
+        for ln in lines:
+            st = str(ln.get("status") or "")
+            val, col = {
+                "accepted": (1.0, GREEN),
+                "pending": (0.55, AMBER),
+            }.get(st, (0.18, RED))
+            rows.append((str(ln.get("name") or ""), str(ln.get("detail") or ""),
+                         col, str(val)))
+        self._rows = rows
+        self.update()
+
+    def paintEvent(self, _e) -> None:      # noqa: N802
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        n = len(self._rows)
+        if n == 0:
             p.setPen(QPen(QColor(TEXT_MUT)))
             p.drawText(QRectF(0, 0, w, h), Qt.AlignCenter, "等待数据")
             return
-
-        # 网格:三层同心多边形
-        for level in (0.35, 0.7, 1.0):
-            path = QPainterPath()
-            for i in range(n):
-                a = -math.pi / 2 + 2 * math.pi * i / n
-                pt = QPointF(cx + r * level * math.cos(a),
-                             cy + r * level * math.sin(a))
-                if i == 0:
-                    path.moveTo(pt)
-                else:
-                    path.lineTo(pt)
-            path.closeSubpath()
-            p.setPen(QPen(QColor(255, 255, 255, 18 if level < 1 else 34), 1))
-            p.setBrush(Qt.NoBrush)
-            p.drawPath(path)
-
-        # 轴线
-        for i in range(n):
-            a = -math.pi / 2 + 2 * math.pi * i / n
-            p.setPen(QPen(QColor(255, 255, 255, 14), 1))
-            p.drawLine(QPointF(cx, cy),
-                       QPointF(cx + r * math.cos(a), cy + r * math.sin(a)))
-
-        # 数据多边形(带呼吸)
-        pulse = 0.94 + 0.06 * math.sin(self._phase)
-        path = QPainterPath()
-        for i, (_name, v, _st) in enumerate(self._vals):
-            a = -math.pi / 2 + 2 * math.pi * i / n
-            rr = r * max(0.08, v) * pulse
-            pt = QPointF(cx + rr * math.cos(a), cy + rr * math.sin(a))
-            if i == 0:
-                path.moveTo(pt)
-            else:
-                path.lineTo(pt)
-        path.closeSubpath()
-
-        grad = QLinearGradient(cx - r, cy - r, cx + r, cy + r)
-        grad.setColorAt(0.0, QColor(94, 231, 240, 90))
-        grad.setColorAt(1.0, QColor(167, 139, 250, 70))
-        p.setBrush(grad)
-        p.setPen(QPen(QColor(CYAN), 2))
-        p.drawPath(path)
-
-        # 顶点亮点
-        for i, (_name, v, st) in enumerate(self._vals):
-            a = -math.pi / 2 + 2 * math.pi * i / n
-            rr = r * max(0.08, v) * pulse
-            pt = QPointF(cx + rr * math.cos(a), cy + rr * math.sin(a))
-            col = {"accepted": GREEN, "pending": AMBER}.get(st, RED)
-            p.setPen(Qt.NoPen)
-            p.setBrush(QColor(col))
-            p.drawEllipse(pt, 4, 4)
-            p.setBrush(QColor(col + "44"))
-            p.drawEllipse(pt, 9, 9)
-
-        # 标签:按状态上色,外移一点,加半透明底片防止压在网格上看不清
+        row_h = min(34.0, h / n)
         f = p.font()
         f.setPointSize(9)
-        f.setBold(False)
         p.setFont(f)
         fm = p.fontMetrics()
-        for i, (name, v, st) in enumerate(self._vals):
-            a = -math.pi / 2 + 2 * math.pi * i / n
-            # 夹在控件内:底部那个标签总被裁,干脆按边界收
-            lx = max(52.0, min(w - 52.0, cx + (r + 22) * math.cos(a)))
-            ly = max(12.0, min(h - 12.0, cy + (r + 22) * math.sin(a)))
-            tw = fm.horizontalAdvance(name) + 10
-            rect = QRectF(lx - tw / 2, ly - 10, tw, 20)
-            col = {"accepted": GREEN, "pending": AMBER}.get(st, TEXT_DIM)
+        name_w = 96
+        for i, (name, detail, col, val) in enumerate(self._rows):
+            y = i * row_h
+            # 名字
+            p.setPen(QPen(QColor(TEXT)))
+            p.drawText(QRectF(2, y, name_w - 6, row_h), Qt.AlignLeft | Qt.AlignVCenter,
+                       fm.elidedText(name, Qt.ElideRight, name_w - 10))
+            # 条
+            bar_x = name_w
+            bar_w = max(20.0, w - name_w - 8)
+            bar_y = y + row_h * 0.32
+            bar_h = max(4.0, row_h * 0.36)
             p.setPen(Qt.NoPen)
-            p.setBrush(QColor(10, 14, 19, 190))
-            p.drawRoundedRect(rect, 6, 6)
-            p.setPen(QPen(QColor(col)))
-            p.drawText(rect, Qt.AlignCenter, name)
-            # 顶点数值
+            p.setBrush(QColor(255, 255, 255, 12))
+            p.drawRoundedRect(QRectF(bar_x, bar_y, bar_w, bar_h), bar_h / 2, bar_h / 2)
+            # QColor 认 #AARRGGBB,不认 #RRGGBBAA —— 拼 "cc" 会把 alpha 当成红分量
+            bc = QColor(col)
+            bc.setAlpha(210)
+            p.setBrush(bc)
+            p.drawRoundedRect(QRectF(bar_x, bar_y, bar_w * float(val), bar_h),
+                              bar_h / 2, bar_h / 2)
+            # 结论(条上方小字)
             f2 = p.font()
             f2.setPointSize(7)
             p.setFont(f2)
-            p.setPen(QPen(QColor(255, 255, 255, 90)))
-            p.drawText(QRectF(lx - 30, ly + 9, 60, 12), Qt.AlignCenter,
-                       f"{v:.0%}")
+            p.setPen(QPen(QColor(TEXT_MUT)))
+            p.drawText(QRectF(bar_x, y + row_h * 0.02, bar_w, row_h * 0.3),
+                       Qt.AlignLeft | Qt.AlignVCenter,
+                       fm.elidedText(detail, Qt.ElideRight, int(bar_w)))
             p.setFont(f)
+        # 图例
+        f.setPointSize(7)
+        p.setFont(f)
+        lx = 2.0
+        for txt, col in (("通过", GREEN), ("待跟", AMBER), ("证否", RED)):
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(col))
+            p.drawEllipse(QPointF(lx + 4, h - 8), 3, 3)
+            p.setPen(QPen(QColor(TEXT_MUT)))
+            p.drawText(QRectF(lx + 10, h - 16, 34, 14),
+                       Qt.AlignLeft | Qt.AlignVCenter, txt)
+            lx += 44
 
 
 class _TrainCurve(QWidget):
@@ -233,7 +264,9 @@ class _TrainCurve(QWidget):
         lastx = px(n - 1)
         lasty = pad_t + ih * (1 - (accs[-1] - a_lo) / a_span)
         p.setPen(Qt.NoPen)
-        p.setBrush(QColor(GREEN + "55"))
+        halo = QColor(GREEN)
+        halo.setAlpha(85)
+        p.setBrush(halo)
         p.drawEllipse(QPointF(lastx, lasty), 8, 8)
         p.setBrush(QColor(GREEN))
         p.drawEllipse(QPointF(lastx, lasty), 4, 4)
@@ -306,36 +339,41 @@ class OrganismPage(QWidget):
         root.addWidget(board, 1)
 
         # 左
-        left = Card("能力雷达", hint="七条线 · 绿=通过 黄=待跟 红=证否")
-        self.radar = _Radar()
-        left.add(self.radar, 1)
+        left = Card("八条路走得怎么样", hint="环=赢了几条 · 条=每条进展")
+        self.ring = _Ring()
+        left.add(self.ring, 0)
+        self.bars = _LineBars()
+        left.add(self.bars, 1)
         self.data_lbl = label("", dim=True)
         self.data_lbl.setWordWrap(True)
         left.body().addWidget(self.data_lbl)
         board.add(left, 0, 0)
 
         # 中
-        mid = Card("训练曲线", hint="用低波动+动量预测三重障碍标签")
+        mid = Card("让机器自己学一次", hint="猜「先涨到止盈,还是先跌到止损」")
         self.curve = _TrainCurve()
         mid.add(self.curve, 1)
         grid = QHBoxLayout()
-        self.s_loss = StatCard("最终 loss", "-")
-        self.s_acc = StatCard("测试准确率", "-")
-        self.s_lift = StatCard("相对基线", "-")
-        for c in (self.s_loss, self.s_acc, self.s_lift):
+        self.s_auc = StatCard("区分能力", "-")
+        self.s_rec = StatCard("抓到上涨", "-")
+        self.s_acc = StatCard("整体猜对", "-")
+        for c in (self.s_auc, self.s_rec, self.s_acc):
             grid.addWidget(c)
         mid.body().addLayout(grid)
+        self.s_cm = label("", dim=True)
+        self.s_cm.setWordWrap(True)
+        mid.body().addWidget(self.s_cm)
         self.train_hint = label("", dim=True)
         self.train_hint.setWordWrap(True)
         mid.body().addWidget(self.train_hint)
         board.add(mid, 0, 1)
 
         # 右
-        right = Card("成长与进化", hint="累计尝试 vs 真正站住的")
+        right = Card("成长与进化", hint="试了多少次 vs 真正站住的")
         grow = QHBoxLayout()
-        self.s_try = StatCard("累计尝试", "-")
-        self.s_win = StatCard("真正通过", "-")
-        self.s_rate = StatCard("成功率", "-")
+        self.s_try = StatCard("试过几次", "-")
+        self.s_win = StatCard("真站住", "-")
+        self.s_rate = StatCard("命中率", "-")
         for c in (self.s_try, self.s_win, self.s_rate):
             grow.addWidget(c)
         right.body().addLayout(grow)
@@ -364,15 +402,33 @@ class OrganismPage(QWidget):
         self.sub.setText(
             f"日线 {d.get('codes', 0)} 只 / {d.get('daily_bars', 0):,} 根 · "
             f"5分钟 {d.get('min5_codes', 0)} 只 · 财务 {d.get('finance_codes', 0)} 只")
+        recent = d.get("recent_days") or []
+        today_n = recent[-1]["codes"] if recent else 0
+        prev_n = recent[-2]["codes"] if len(recent) > 1 else 0
+        delta = today_n - prev_n
+        arrow = "↑" if delta > 0 else ("↓" if delta < 0 else "→")
+        # 当天往往还没补完(盘后任务 19:00 才跑),数字比昨天少很正常,别吓人
+        note = "(今天还没补完)" if delta < -200 else ""
+        self.sub.setText(
+            f"已有数据:股票 {d.get('codes', 0):,} 只 · 日线 "
+            f"{d.get('daily_bars', 0):,} 根 · 5分钟线 {d.get('min5_codes', 0)} 只 · "
+            f"财务 {d.get('finance_codes', 0):,} 只   |   "
+            f"今天收到 {today_n:,} 只 {arrow}{abs(delta):,}{note}   |   "
+            f"覆盖 {str(d.get('first_day') or '')[:7]} 至今")
         self.data_lbl.setText(
-            f"因子库 {f.get('total', 0)} 条(通过 {f.get('accepted', 0)} / "
-            f"拒绝 {f.get('rejected', 0)})\n"
-            f"最近审计 {f.get('last_audit') or '—'}\n"
-            f"七条线 {ln.get('accepted', 0)} 通过 / {ln.get('rejected', 0)} 证否 / "
-            f"{ln.get('pending', 0)} 待跟")
+            f"最近 7 天每天收到的票数:\n"
+            + "  ".join(f"{str(r['day'])[5:]}={r['codes']}"
+                        for r in recent[-7:])
+            + f"\n因子库 {f.get('total', 0)} 条"
+            f"(能用 {f.get('accepted', 0)} / 排除 {f.get('rejected', 0)})"
+            f" · 最近检查 {str(f.get('last_audit') or '—')[:16]}")
 
-        self.radar.set_data(ln.get("lines") or [])
-        self._fill_lines(ln.get("lines") or [])
+        lines_data = ln.get("lines") or []
+        self.ring.set_data(int(ln.get("accepted") or 0),
+                           int(ln.get("pending") or 0),
+                           int(ln.get("rejected") or 0))
+        self.bars.set_data(lines_data)
+        self._fill_lines(lines_data)
 
         self.s_try.set(str(g.get("attempts", 0)))
         self.s_win.set(str(g.get("wins", 0)))
@@ -406,13 +462,31 @@ class OrganismPage(QWidget):
     def _show_train(self, tr: dict) -> None:
         fin = tr.get("final") or {}
         self.curve.set_data(tr.get("curve") or [], float(tr.get("baseline") or 0))
-        self.s_loss.set(f"{fin.get('loss', 0):.4f}")
-        self.s_acc.set(f"{(fin.get('test_acc') or 0) * 100:.1f}%")
-        lift = float(tr.get("lift") or 0)
-        self.s_lift.set(f"{lift * 100:+.1f}%", UP if lift > 0 else DOWN)
+        acc = float(fin.get("test_acc") or 0)
+        base = float(tr.get("baseline") or 0)
+        auc = float(tr.get("auc") or 0)
+        rec = float(tr.get("recall") or 0)
+
+        # 用大白话:区分能力 / 抓到上涨 / 整体猜对
+        self.s_auc.set(f"{auc:.2f}", UP if auc > 0.55 else DOWN)
+        self.s_rec.set(f"{rec * 100:.1f}%", UP if rec > 0.3 else DOWN)
+        self.s_acc.set(f"{acc * 100:.1f}%",
+                       UP if acc > base + 0.01 else DOWN)
+
+        cm = tr.get("confusion") or {}
+        hit = int(cm.get("tp", 0)) + int(cm.get("tn", 0))
+        miss = int(cm.get("fp", 0)) + int(cm.get("fn", 0))
+        self.s_cm.setText(
+            f"猜对 {hit:,} 次 / 猜错 {miss:,} 次 —— "
+            f"其中「说会涨、结果涨了」{cm.get('tp', 0):,} 次,"
+            f"「说会涨、其实没涨」{cm.get('fp', 0):,} 次")
+        verdict = ("这台机器学到了东西" if auc > 0.55
+                   else ("和闭眼瞎猜差不多" if auc > 0.45
+                         else "比瞎猜还差 —— 学到的全是噪声"))
         self.train_hint.setText(
-            f"{tr.get('n', 0):,} 个样本({tr.get('n_train', 0):,} 训练 / "
-            f"{tr.get('n_test', 0):,} 测试)· 权重 {tr.get('weights')} · "
+            f"用来判断的样本 {tr.get('n', 0):,} 条"
+            f"(学 {tr.get('n_train', 0):,} 条 / 考 {tr.get('n_test', 0):,} 条)· "
+            f"全部猜「不会涨」的命中率是 {base:.0%} · {verdict} · "
             f"{tr.get('at', '')}")
 
     # ------------------------------------------------------------------ 动作
