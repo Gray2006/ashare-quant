@@ -69,9 +69,24 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--pages", type=int, default=60, help="每页 100 条,60 页够全市场")
     ap.add_argument("--sleep", type=float, default=0.25)
+    ap.add_argument("--force", action="store_true",
+                    help="即使当日已够也重拉")
     args = ap.parse_args()
 
+    from quantlab.data.kline import _last_trade_day
     from quantlab.data.store import store
+
+    # 短路:库里最近一个交易日已经有足够多的票,就不用再拉 50 页。
+    # 非交易日 / 盘前跑会拿到同一个交易日的快照,重复拉是纯浪费。
+    st0 = store()
+    day0 = _last_trade_day()
+    have = st0.conn.execute(
+        "select count(*) from kline_cache where klt=101 and fqt=1 and bar_time=?",
+        (day0,)).fetchone()[0]
+    if have >= 3000:
+        log(f"{day0} 已有 {have} 只,跳过(要强制重拉用 --force)")
+        if not args.force:
+            return 0
 
     bars = snapshot_bars(args.pages, args.sleep)
     if not bars:

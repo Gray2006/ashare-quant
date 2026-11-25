@@ -36,7 +36,20 @@ def step_snapshot(fp) -> None:
     log("① 补全当日日线…", fp)
     try:
         from tools.sync_snapshot import snapshot_bars
+
+        from quantlab.data.kline import _last_trade_day
         from quantlab.data.store import store
+
+        # 短路:当日已经补过就不重复拉(非交易日跑会拿到同一天的数据)
+        st0 = store()
+        day0 = _last_trade_day()
+        have0 = st0.conn.execute(
+            "select count(*) from kline_cache where klt=101 and fqt=1 and bar_time=?",
+            (day0,)).fetchone()[0]
+        if have0 >= 3000:
+            log(f"  {day0} 已有 {have0} 只,跳过", fp)
+            return
+
         bars = snapshot_bars(pages=60, sleep=0.2)
         if not bars:
             log("  没拿到快照(非交易日?)", fp)
