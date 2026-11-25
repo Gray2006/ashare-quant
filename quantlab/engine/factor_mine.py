@@ -399,22 +399,33 @@ def composite_backtest(panel: dict, factors: list[dict], horizon: int = 5,
     score = score.reindex(close.index)
     rets = close.pct_change().fillna(0.0)
 
+    # 选票用当日收盘的因子值,所以**当天不能享受当天的收益** ——
+    # 收盘算出信号时这根 K 线已经走完了。原来的写法当天就持仓并乘当日收益,
+    # 等于免费吃到一个已经发生过的涨幅(200 天能跑出 +1120%,夏普 4.8)。
+    # 正确顺序:收盘选票 → 记下待换 → 明天起才持有。
     equity, curve, holdings, prev = 1.0, [], [], set()
+    pending: list[str] | None = None
     turnover_sum = 0.0
     for i, d in enumerate(close.index):
         if i % max(1, int(horizon)) == 0:
             row = score.loc[d].dropna() if d in score.index else pd.Series(dtype=float)
             row = row.reindex(close.columns).dropna()
             if len(row) >= max(3, top_n):
-                holdings = list(row.nlargest(int(top_n)).index)
-                turn = len(set(holdings) ^ prev) / max(1, len(holdings))
+                picked = list(row.nlargest(int(top_n)).index)
+                # 换手率只算「买进来的那部分」。原来用对称差(集合 ^)除以持仓数,
+                # 全换仓时 turn=2,成本被扣成两倍 —— 保守但不对。
+                turn = len(set(picked) - prev) / max(1, len(picked))
                 equity *= (1 - float(cost) * turn)
                 turnover_sum += turn
-                prev = set(holdings)
+                prev = set(picked)
+                pending = picked
         if holdings:
             r = float(rets.loc[d].reindex(holdings).mean())
             equity *= (1 + r)
         curve.append([str(d)[:10], round(equity, 4)])
+        if pending is not None:          # 收盘后换仓,明天才生效
+            holdings = pending
+            pending = None
 
     eq = pd.Series([v for _d, v in curve])
     daily = eq.pct_change().dropna()
