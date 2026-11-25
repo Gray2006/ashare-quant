@@ -1335,6 +1335,51 @@ def _linfit(w) -> tuple[float, float, float]:
     return (b, r2, float(y[-1] - yhat[-1]))
 
 
+def _roll_linfit(s: pd.Series, n: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """滚动线性回归的向量化版:一次算出 (斜率, R², 末点残差)。
+
+    原来 slope/rsquare/resi 各自 rolling(n).apply(_linfit),等于在 Python 里
+    逐窗口循环 —— 300 只 × 250 天要 4.7 秒。这里用 sliding_window_view
+    一次算完三样,同一份中间量复用,快一个数量级。
+    """
+    y = s.to_numpy(dtype="float64")
+    m = len(y)
+    nan_out = np.full(m, np.nan)
+    if n < 2 or m < n:
+        return nan_out, nan_out.copy(), nan_out.copy()
+
+    win = np.lib.stride_tricks.sliding_window_view(y, n)   # (m-n+1, n)
+    ok = np.isfinite(win).all(axis=1)                       # 窗口内不能有 NaN
+    x = np.arange(n, dtype="float64")
+    xm = x.mean()
+    xc = x - xm
+    sxx = float((xc ** 2).sum())
+
+    slope = np.full(win.shape[0], np.nan)
+    r2 = np.full(win.shape[0], np.nan)
+    resi = np.full(win.shape[0], np.nan)
+    if ok.any():
+        w = win[ok]
+        ym = w.mean(axis=1, keepdims=True)
+        yc = w - ym
+        b = (yc * xc).sum(axis=1) / sxx
+        yhat_c = b[:, None] * xc              # 相对均值的拟合值
+        ss_res = ((yc - yhat_c) ** 2).sum(axis=1)
+        ss_tot = (yc ** 2).sum(axis=1)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            r = np.where(ss_tot > 0, 1.0 - ss_res / ss_tot, 0.0)
+        slope[ok] = b
+        r2[ok] = r
+        resi[ok] = yc[:, -1] - yhat_c[:, -1]
+
+    def pad(arr):
+        out = np.full(m, np.nan)
+        out[n - 1:] = arr
+        return out
+
+    return pad(slope), pad(r2), pad(resi)
+
+
 _register("skew", (2, 2), lambda ctx, a: np.asarray(
     _series(a[0]).rolling(_win(a[1], "skew", ctx), min_periods=3).skew(),
     dtype="float64"), "skew(x,n) 时序偏度", window_at=-1, group="时序")
@@ -1359,17 +1404,14 @@ _register("prod", (2, 2), lambda ctx, a: np.asarray(
     _series(a[0]).rolling(_win(a[1], "prod", ctx), min_periods=1).apply(
         lambda w: float(np.prod(w)), raw=True),
     dtype="float64"), "prod(x,n) 滚动乘积", window_at=-1, group="时序")
-_register("slope", (2, 2), lambda ctx, a: np.asarray(
-    _series(a[0]).rolling(_win(a[1], "slope", ctx), min_periods=2).apply(
-        lambda w: _linfit(w)[0], raw=True), dtype="float64"),
+_register("slope", (2, 2), lambda ctx, a: _roll_linfit(
+    _series(a[0]), _win(a[1], "slope", ctx))[0],
     "slope(x,n) n 根线性回归斜率", window_at=-1, group="时序")
-_register("rsquare", (2, 2), lambda ctx, a: np.asarray(
-    _series(a[0]).rolling(_win(a[1], "rsquare", ctx), min_periods=2).apply(
-        lambda w: _linfit(w)[1], raw=True), dtype="float64"),
+_register("rsquare", (2, 2), lambda ctx, a: _roll_linfit(
+    _series(a[0]), _win(a[1], "rsquare", ctx))[1],
     "rsquare(x,n) 线性回归 R²(趋势的干净程度)", window_at=-1, group="时序")
-_register("resi", (2, 2), lambda ctx, a: np.asarray(
-    _series(a[0]).rolling(_win(a[1], "resi", ctx), min_periods=2).apply(
-        lambda w: _linfit(w)[2], raw=True), dtype="float64"),
+_register("resi", (2, 2), lambda ctx, a: _roll_linfit(
+    _series(a[0]), _win(a[1], "resi", ctx))[2],
     "resi(x,n) 当前值相对回归线的残差", window_at=-1, group="时序")
 _register("ts_cov", (3, 3), lambda ctx, a: np.asarray(
     _series(a[0]).rolling(_win(a[2], "ts_cov", ctx), min_periods=3).cov(
