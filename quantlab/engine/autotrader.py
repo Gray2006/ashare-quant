@@ -895,6 +895,18 @@ class AutoTrader:
                     "code": code, "reason": f"单票预算 {buget_i:,.0f} 买不到一手"
                                              f"({px:.2f}×{exchange.min_qty(code)})"})
                 continue
+            # 目标缓动(默认 0 = 关):差额太小就不新开分批计划,
+            # 防止「目标随权益漂移 → 反复从头分批 → 碎单连买」
+            try:
+                _hyst = float(self.cfg.get("selflearn.target_hysteresis_pct", 0) or 0)
+                if not sl.topup_ok(want_qty, held_qty, exchange.min_qty(code), _hyst):
+                    plan.skipped.append({
+                        "code": code,
+                        "reason": f"差额 {delta} 小于目标缓动线"
+                                  f"({_hyst:.1%} of {want_qty})"})
+                    continue
+            except Exception:  # noqa: BLE001
+                pass
             tranche_info: dict = {}
             if self._sl():
                 try:
@@ -1002,11 +1014,20 @@ class AutoTrader:
         return plan
 
     def _daily_orders(self) -> int:
-        """当日已发委托数。演练(dry_run)不下单;设为不限笔数时也不统计。"""
-        if self.dry_run or self.max_orders_per_day <= 0:
+        """当日已发委托数。
+
+        **计数和执行层上限解耦**:`max_orders_per_day=0` 只表示「执行层不限」,
+        不代表「今天没下过单」。原来这里跟着返回 0,导致风控层的
+        `risk.max_daily_orders` 永远看到 0 笔、永远不拦 ——
+        实测 603389 一天被买 36 次就是这个原因(2026-11-26 修)。
+        """
+        if self.dry_run:
             return 0
-        acct = getattr(self.gw, "account_name", None)
-        return store().orders_today_count(account=acct)
+        try:
+            acct = getattr(self.gw, "account_name", None)
+            return store().orders_today_count(account=acct)
+        except Exception:  # noqa: BLE001
+            return 0
 
     def _log(self, plan: Plan) -> None:
         try:
