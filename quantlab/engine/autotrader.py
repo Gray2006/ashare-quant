@@ -335,6 +335,29 @@ class AutoTrader:
         return keep or codes
 
     # ------------------------------------------------------------ 执行
+    def _min_hold(self) -> int:
+        """策略的最短持有天数。读不到就用 3 —— 跟 backtest 的默认值一致。
+
+        auto_mode 下实盘和回测必须是同一套换手约束,否则胜率没法比。
+        """
+        try:
+            from ..config import cfg as _cfg
+            c = _cfg()
+            v = c.get("autotrade.min_hold_days", None)
+            if v is not None:
+                return max(0, int(v))
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from .strategy import REGISTRY
+            cls = REGISTRY.get(self.strategy)
+            if cls is not None:
+                p = cls.default_params() or {}
+                return max(0, int(p.get("min_hold", 3) or 0))
+        except Exception:  # noqa: BLE001
+            pass
+        return 3
+
     def _sl(self) -> bool:
         """私有学习引擎的惰性初始化。不改 __init__ 签名,免得动到调用方。"""
         if not hasattr(self, "_sl_ready"):
@@ -835,9 +858,27 @@ class AutoTrader:
         # 1) 先卖:不在目标里的持仓。
         #    只在"本轮真的选出票"或"回撤闸要求清仓"时执行 —— 选股失败时
         #    目标集是空的,照这个规则会把满仓全部清掉,不能算调仓。
+        # 最短持有:回测里 min_hold 强制(backtest.py),实盘原来没有 ——
+        # 导致每天重算目标就换手,avg_hold 0.92 天,回测能拿 3 天。
+        # 只约束「目标漂移卖出」;止损/止盈/清仓在上面已经处理完,不受影响。
+        min_hold = self._min_hold()
+        today = time.strftime("%Y-%m-%d")
         for code, p in (positions.items() if (picking or g.get("liquidate")) else ()):
             if code in target_codes or code in sold_in_sl or p.qty <= 0:
                 continue
+            if min_hold > 0 and not g.get("liquidate"):
+                try:
+                    opened = float(getattr(p, "opened_at", 0) or 0)
+                except (TypeError, ValueError):
+                    opened = 0.0
+                if opened > 0:
+                    held_days = (time.time() - opened) / 86400.0
+                    if held_days < min_hold:
+                        plan.skipped.append({
+                            "code": code,
+                            "reason": (f"最短持有 {min_hold} 天(已持 "
+                                       f"{held_days:.1f} 天),本轮不卖")})
+                        continue
             q = quotes.get(code) or {}
             px = float(q.get("price") or p.last_price or 0)
             if px <= 0:
