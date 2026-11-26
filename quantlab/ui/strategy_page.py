@@ -79,7 +79,7 @@ class StrategyPage(QWidget):
     # ------------------------------------------------------------ 界面
     def _build(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        root.setContentsMargins(0, 6, 0, 0)
         root.setSpacing(8)
 
         head = QWidget()

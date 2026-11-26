@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from PySide6.QtCore import QDate, Signal
 from PySide6.QtWidgets import (QComboBox, QDateEdit, QDoubleSpinBox, QFileDialog,
-                               QHBoxLayout, QLabel, QPlainTextEdit, QProgressBar,
+                               QGridLayout, QHBoxLayout, QLabel, QPlainTextEdit, QProgressBar,
                                QPushButton, QSpinBox, QTabWidget, QVBoxLayout, QWidget)
 
 from ..config import APP_DIR
@@ -72,13 +72,18 @@ class BacktestPage(QWidget):
         self.pos_pct.setValue(11)
         self.pos_pct.setSuffix("%")
 
-        for lab, w in (("策略", self.stg), ("股票池", self.pool), ("只数", self.n_stocks),
-                       ("起始", self.start), ("结束", self.end), ("资金", self.cash),
-                       ("最大持仓", self.max_pos), ("单票仓位", self.pos_pct)):
-            r1.addWidget(label(lab, dim=True))
-            r1.addWidget(w)
-            r1.addSpacing(6)
-        cfg_card._lay.addLayout(r1)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(6)
+        for idx, (lab, w) in enumerate((
+                ("策略", self.stg), ("股票池", self.pool),
+                ("只数", self.n_stocks), ("起始", self.start),
+                ("结束", self.end), ("资金", self.cash),
+                ("最大持仓", self.max_pos), ("单票仓位", self.pos_pct))):
+            row, col = divmod(idx, 4)
+            grid.addWidget(label(lab, dim=True), row, col * 2)
+            grid.addWidget(w, row, col * 2 + 1)
+        cfg_card._lay.addLayout(grid)
 
         r2 = QHBoxLayout()
         self.btn_reload = QPushButton("刷新策略")
