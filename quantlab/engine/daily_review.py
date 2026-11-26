@@ -338,6 +338,30 @@ def _mtm(account: str, snap: dict, quotes: dict | None) -> float:
     return (cash + mv) if priced else base
 
 
+def _live_snapshot(account: str, quotes: dict | None) -> dict | None:
+    """今日快照还没写时,用当前现金 + 持仓现价现算一条。
+
+    快照只在模拟盘 _save()/自动交易跑完时写。程序刚启动、或者今天还没
+    下过单,今日快照就是空的 —— 以前这里直接判「缺快照」显示 --,
+    用户看到的就是「当日盈亏算不出来」。
+    """
+    try:
+        st = store()
+        cash = float(st.get_account(f"sim_cash:{account}", 0) or 0)
+        pos = st.load_positions(account)
+        mv = 0.0
+        for p in pos:
+            q = (quotes or {}).get(str(p.get("code") or "")) or {}
+            px = float(q.get("price") or p.get("last_price") or 0)
+            if px <= 0:
+                return None
+            mv += px * int(p.get("qty") or 0)
+        return {"day": dt.date.today().isoformat(), "account": account,
+                "equity": cash + mv, "cash": cash, "market_value": mv}
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def report(account: str | None = "default", day: str | None = None,
            quotes: dict | None = None) -> dict:
     """当日盈亏 + 操作原因 + 按标的贡献。
@@ -358,8 +382,13 @@ def report(account: str | None = "default", day: str | None = None,
     booked: list[str] = []
     for a in accts:
         t, p = _today_snapshot(a, day), _prev_snapshot(a, day)
-        if not (t and p):
+        if not p:
             continue
+        if not t:
+            # 今日快照还没写(刚启动/今天没下过单):用当前现金+持仓现价现算
+            t = _live_snapshot(a, quotes)
+            if not t:
+                continue
         # 今日快照按现价重估:快照可能是在没有行情时写的(市值退回成本价),
         # 那样持仓涨跌根本不在总账里。
         # 上一日权益优先按「昨日收盘价」重算 —— 快照里的市值是写快照那一刻
