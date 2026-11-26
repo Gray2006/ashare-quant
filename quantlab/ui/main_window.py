@@ -24,9 +24,6 @@ from ..version import __version__ as VERSION
 from .auto_page import AutoPage
 from .backtest_page import BacktestPage
 from .board import Board
-from .cloud_page import CloudPage
-from .crypto_page import CryptoPage
-from .crypto_quant_page import CryptoQuantPage
 from .forecast_page import ForecastPage
 from .pick_page import PickPage
 from .risk_page import RiskBandPage
@@ -55,9 +52,7 @@ from .theme import (ACCENT, BORDER, DOWN, FLAT, QSS, TEXT_MUT, UP, apply_app_pal
 from .trade_page import TradePage
 from .world_page import WorldPage
 
-# 导航按「干什么」分组,不再是 21 行平铺。侧栏的分组名来自这里的第一个元素。
-# 顺序就是页面顺序(Ctrl+1~n 也跟它走),所以「加密」必须紧跟「交易」:
-# tools/selftest_okx.py 断言了这条。
+# 导航按「干什么」分组。公开版不含交易网关、加密、云端与私有学习页。
 NAV_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
     ("看盘", [
         ("行情", "quote", "自选股实时报价 · 分时 / K线 / 资金流 / 新闻"),
@@ -68,6 +63,7 @@ NAV_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
         ("市场热点", "hotspot", "情绪 · 概念/行业涨幅榜 · 强势个股 · 热点快讯"),
         ("全球市场", "world", "美股港股商品汇率 · 国际新闻时政"),
         ("资讯", "news", "财经资讯与政策 · 分类过滤 · 双击看原文"),
+        ("预警", "alert", "价格/涨跌幅条件预警 · 命中留痕"),
     ]),
     ("研究", [
         ("公司分析", "company", "F10 资料 · 主营构成 · 财务趋势 · 估值同业 · 股东事件"),
@@ -75,60 +71,31 @@ NAV_GROUPS: list[tuple[str, list[tuple[str, str, str]]]] = [
         ("选股", "screen", "条件筛选 · 主力资金榜 · 板块资金流"),
         ("技术分析", "ta", "缠论结构 · 道氏趋势 · 智能资金 · 背离 · 共振投票"),
         ("形态", "pattern", "K线形态识别 · 出现之后的实测涨跌频率"),
-        ("因子挖掘", "factor_mine", "批量试表达式 · IC/ICIR/分层收益 · 自动去重"),
+        ("因子挖掘", "factor_mine", "模板迭代 / 遗传搜索 · IC/ICIR/样本外 · 组合回测"),
         ("策略广场", "strategy", "内置策略 · 自定义规则 · Pine Script 导入"),
         ("回测", "backtest", "策略回测 · 净值曲线 · 成绩单与批量对比"),
     ]),
     ("研判", [
         ("大盘研判", "macro", "五维打分:指数趋势 / 广度 / 资金 / 外围 / 消息"),
         ("走势预判", "forecast", "涨/平/跌概率 + 因子贡献 + 走查命中率"),
-        ("涨幅预选", "pick", "全市场快扫 · 每日候选 + 参考幅度 + 回传与回填"),
+        ("涨幅预选", "pick", "全市场快扫 · 每日候选 + 参考幅度"),
         ("风险档位", "risk", "横截面波动档位 · 建议仓位上限 · 走查校验"),
     ]),
     ("交易", [
-        ("交易", "trade", "模拟盘下单 · 持仓与委托;可接同花顺"),
-        ("加密", "crypto", "OKX 现货 7×24 · K线 / 下单 / 持仓,支持模拟交易"),
-        ("加密量化", "cryptoq", "独立模拟盘 · 本地零延迟撮合 · 多因子自动交易 + 学习"),
-        ("自动交易", "auto", "调度、计划、自定义策略与执行日志"),
-        ("预警", "alert", "价格/涨跌幅条件预警 · 命中留痕"),
+        ("模拟盘", "trade", "多账户模拟下单 · 持仓与委托 · T+1 与费用按回测口径"),
+        ("自动交易", "auto", "定时跑策略调仓 · 只走模拟盘 · 回撤闸与动态仓位"),
+        ("复盘", "review", "已实现盈亏 · 纪律检查 · 按标的与按日归因"),
+        ("学习", "learn", "自适应参数 · 今日日报 · 预测准确率"),
     ]),
     ("管理", [
-        ("复盘", "review", "已实现盈亏 · 纪律检查 · 按标的与按日归因"),
-        ("学习", "learn", "私有自适应学习 · 今日日报 · 参数建议 · 预测准确率"),
         ("数据健康", "health", "数据源状态 · 熔断明细 · 各领域数据新鲜度"),
-        ("设置", "settings", "刷新频率、风控硬闸、同花顺通道、OKX 密钥"),
+        ("设置", "settings", "刷新频率、风控硬闸、数据源与界面"),
     ]),
 ]
 
 # 扁平化:全应用只认这一份顺序(页面索引、Ctrl+n、page_map 都按它)
 NAV: list[tuple[str, str, str]] = [item for _g, items in NAV_GROUPS for item in items]
 
-
-def _build_nav() -> tuple[list[tuple[str, str, str]], list[tuple[str, list]]]:
-    """按配置决定要不要加「云端」页。
-
-    这一页只在想看的机器上出现(config `ui.cloud_page`),
-    发给别人的包里默认没有 —— 导航顺序、页面下标都跟着它变,
-    所以只在这里拼一次,别处一律用 NAV / NAV_GROUPS。
-    """
-    groups = [(g, list(items)) for g, items in NAV_GROUPS]
-    nav = [item for _g, items in groups for item in items]
-    if not bool(cfg().get("ui.cloud_page", False)):
-        return nav, groups
-    if any(k == "cloud" for _n, k, _h in nav):
-        return nav, groups
-    row = ("云端", "cloud", "群体先验 · 云端学习日报 · 别人回传的统计")
-    for i, (g, items) in enumerate(groups):
-        if g == "管理":
-            groups[i] = (g, items + [row])
-            break
-    else:
-        groups.append(("管理", [row]))
-    nav = [item for _g, items in groups for item in items]
-    return nav, groups
-
-
-NAV, NAV_GROUPS = _build_nav()
 # key → 所属分组名
 NAV_GROUP_OF: dict[str, str] = {
     key: gname for gname, items in NAV_GROUPS for _n, key, _h in items}
@@ -211,10 +178,8 @@ class MainWindow(QMainWindow):
         "forecast": ForecastPage, "pick": PickPage, "risk": RiskBandPage,
         "pattern": PatternPage, "ta": TAPage, "grid": GridPage,
         "world": WorldPage, "news": NewsPage, "trade": TradePage,
-        "alert": AlertPage, "review": ReviewPage, "crypto": CryptoPage,
-        "cryptoq": CryptoQuantPage,
+        "alert": AlertPage, "review": ReviewPage,
         "health": HealthPage, "settings": SettingsPage, "learn": LearnPage,
-        "cloud": CloudPage,
     }
     # 要网关实例的页
     _NEED_GW = ("auto", "trade", "review")
@@ -370,14 +335,6 @@ class MainWindow(QMainWindow):
         try:
             from .. import model
             model.start()
-        except Exception:
-            pass
-        # 加密量化:配置开了就自动起调度。7×24,不受 A股 时段影响。
-        try:
-            from ..config import cfg
-            if cfg().get("crypto_quant.enabled", False):
-                from ..crypto.scheduler import scheduler
-                scheduler().start()
         except Exception:
             pass
 
@@ -847,6 +804,11 @@ class MainWindow(QMainWindow):
         trade = self._built.get("trade")
         if trade is not None:
             trade.update_quotes(data)
+        # 复盘页只记最新价、不立刻重算;切过去时 ensure_loaded 再用它估浮盈。
+        # 以前这里不推,复盘页的浮盈永远停在第一次加载那一刻。
+        rv = self._built.get("review")
+        if rv is not None:
+            rv.update_quotes(data)
 
     def _on_indexes(self, rows: list) -> None:
         want = {"000001": 0, "399001": 1, "399006": 2, "000300": 3}
@@ -999,20 +961,7 @@ class MainWindow(QMainWindow):
             self.hub.set_interval(interval)
             self._subscribed = self._hub_codes()
             self.hub.set_codes(self._subscribed)
-        try:
-            crypto = self._built.get("crypto")
-            if crypto is not None and crypto.ticker_hub is not None:
-                crypto.ticker_hub.set_interval(
-                    float(self.cfg.get("refresh_seconds.crypto", 2.0)))
-                crypto.ticker_hub.set_codes(crypto._insts())
-        except Exception:
-            pass
         self.quote_page.reload_watchlist()
-        # 「显示云端页」改了要重启才生效:导航在启动时拼好,这里只提醒一句
-        want_cloud = bool(self.cfg.get("ui.cloud_page", False))
-        has_cloud = "cloud" in self.page_map
-        if want_cloud != has_cloud:
-            self._status("「云端」页的显示开关已保存,重启后生效")
 
     @staticmethod
     def _exit_now(code: int = 0) -> None:
@@ -1054,11 +1003,6 @@ class MainWindow(QMainWindow):
             store().checkpoint()
         except Exception:
             pass
-        try:                     # 加密量化独立库同理
-            from ..crypto.store import store as cstore
-            cstore().checkpoint()
-        except Exception:
-            pass
         self._save_geometry()
         # 自测脚本要在关窗后继续断言,设 GRAY_NO_HARD_EXIT=1 走下面的软退出
         if os.environ.get("GRAY_NO_HARD_EXIT") != "1":
@@ -1079,7 +1023,7 @@ class MainWindow(QMainWindow):
                     pass
         for page in (self.auto_page, self.macro_page, self.forecast_page,
                      self.pick_page,
-                     self.risk_page, self.world_page, self.crypto_page,
+                     self.risk_page, self.world_page,
                      self.health_page, self.pattern_page, self.review_page,
                      self.ta_page, self.grid_page, self.lhb_page,
                      self.limitup_page, self.company_page, self.company_eval_page,
@@ -1089,13 +1033,6 @@ class MainWindow(QMainWindow):
                      self.learn_page):
             try:
                 page.stop()
-            except Exception:
-                pass
-        # 云端页是可选的(ui.cloud_page),没建就没有这一页,单独按 _built 取
-        cloud_page = (getattr(self, "_built", {}) or {}).get("cloud")
-        if cloud_page is not None:
-            try:
-                cloud_page.stop()
             except Exception:
                 pass
         try:

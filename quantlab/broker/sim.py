@@ -155,6 +155,15 @@ class SimGateway(Gateway):
             else:
                 curve.append({"date": today, "equity": round(total, 2)})
             self.st.set_account(_EQUITY_KEY.format(acct=self.account_name), curve[-600:])
+            # 同一份权益也写进 sl_equity:复盘页的当日盈亏读的是那张表。
+            # 以前只有自动交易跑完才写 sl_equity,手动下单后复盘页的基准
+            # 还停在旧值,两套快照各写各的,页面上的数字就对不上。
+            try:
+                from ..engine import daily_review as dr
+                dr.snapshot(self.account_name, equity=total, cash=self.cash,
+                            market_value=total - self.cash)
+            except Exception:  # noqa: BLE001
+                pass
         except Exception:
             pass
 

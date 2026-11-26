@@ -244,6 +244,71 @@ def _reasons_multi(accounts: list[str], day: str) -> list[dict]:
     return out
 
 
+def _close_price(code: str, day: str) -> float:
+    """某只票在 day 当天或之前最近一个交易日的收盘价。"""
+    try:
+        r = store().conn.execute(
+            "SELECT close FROM kline_cache WHERE code=? AND klt=101 AND fqt=1 "
+            "AND bar_time<=? ORDER BY bar_time DESC LIMIT 1",
+            (code, day)).fetchone()
+        return float(r[0]) if r and r[0] else 0.0
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def _equity_by_close(account: str, day: str) -> float | None:
+    """按 day 收盘价重算当日权益:现金 + Σ(持仓 × 收盘价)。
+
+    快照里的 market_value 是「写快照那一刻」的价。自动交易在 14:55 跑,
+    写进去的是盘中价;第二天拿它当基准算当日盈亏,昨天尾盘的涨跌就被
+    算成了今天的亏损 —— 这是「当日盈亏不对」的主因。
+    这里用日线收盘价重算,基准才和「收盘权益」一致。
+    数据不全(缺初始资金/缺收盘价)时返回 None,调用方退回快照。
+    """
+    try:
+        st = store()
+        acct = None
+        for a in st.sim_accounts():
+            if str(a.get("name") or "") == account:
+                acct = a
+                break
+        if not acct:
+            return None
+        initial = float(acct.get("initial_cash") or 0)
+        if initial <= 0:
+            return None
+        from . import review as rv
+        raw = st.orders(limit=5000, account=account)
+        raw, _drop = rv._alive(raw, rv._genesis())
+        orders = rv._usable(raw)
+        end = time.mktime(time.strptime(day, "%Y-%m-%d")) + 86400
+        cash = initial
+        qty: dict[str, int] = {}
+        for o in orders:
+            if float(o.get("ts") or 0) >= end:
+                continue
+            px, q = o["_px"], int(o["_qty"])
+            fee = float(o.get("_fee") or 0)
+            code = str(o.get("code") or "")
+            if o.get("side") == "buy":
+                cash -= px * q + fee
+                qty[code] = qty.get(code, 0) + q
+            else:
+                cash += px * q - fee
+                qty[code] = qty.get(code, 0) - q
+        mv = 0.0
+        for code, n in qty.items():
+            if n <= 0:
+                continue
+            px = _close_price(code, day)
+            if px <= 0:
+                return None      # 缺收盘价就别硬算,退回快照
+            mv += px * n
+        return cash + mv
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _mtm(account: str, snap: dict, quotes: dict | None) -> float:
     """按当前价重估一条快照的权益:现金 + Σ 现价×数量。
 
@@ -296,10 +361,14 @@ def report(account: str | None = "default", day: str | None = None,
         if not (t and p):
             continue
         # 今日快照按现价重估:快照可能是在没有行情时写的(市值退回成本价),
-        # 那样持仓涨跌根本不在总账里。上一日快照不重估 —— 那天的价已经定了,
-        # 用今天的价去估它,浮盈会被抹成 0,等于什么都没算。
+        # 那样持仓涨跌根本不在总账里。
+        # 上一日权益优先按「昨日收盘价」重算 —— 快照里的市值是写快照那一刻
+        # 的盘中价,直接拿来当基准会把昨天尾盘的涨跌算成今天的亏损。
+        # 重算不出来(缺收盘价/缺初始资金)才退回快照。
         t_eq = _mtm(a, t, quotes)
-        p_eq = float(p.get("equity") or 0)
+        p_eq = _equity_by_close(a, str(p.get("day") or ""))
+        if p_eq is None:
+            p_eq = float(p.get("equity") or 0)
         eq_today += t_eq
         eq_prev += p_eq
         total += t_eq - p_eq

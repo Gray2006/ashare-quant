@@ -32,6 +32,10 @@ class ReviewPage(QWidget):
         self.gw = gw0
         self._tasks: list[TaskRunner] = []
         self._rep: dict | None = None
+        # 主窗口推来的最新行情。只存不算 —— 复盘要查库、配对,不能跟着
+        # 行情 tick 重算;切到这一页时再用它重估浮盈。
+        self._live_quotes: dict = {}
+        self._dirty = True
         self._build()
         self._refresh_accounts()
         self.refresh()
@@ -173,6 +177,9 @@ class ReviewPage(QWidget):
             self.status.emit(f"删除失败:{e}")
 
     def refresh(self) -> None:
+        # 正在算就别再起一个:切页/行情推送会把 refresh 叫得很勤
+        if any(t.isRunning() for t in self._tasks):
+            return
         self.btn.setEnabled(False)
         self.verdict.setText("读本地成交记录…")
 
@@ -187,18 +194,20 @@ class ReviewPage(QWidget):
             # 读的是一个不存在的 default 账户,持仓为 0,浮盈就恒等于 0。
             cols = store().sim_accounts()
             names = [a["name"] for a in cols] if acc is None else [acc]
-            quotes = {}
+            quotes = dict(getattr(self, "_live_quotes", {}) or {})
             codes: list[str] = []
             for n in names:
                 for p in store().load_positions(n):
                     c = str(p.get("code") or "")
                     if c and c not in codes:
                         codes.append(c)
-            if codes:
+            # 主窗口还没推过价(或推送里缺这批持仓)就自己拉一次
+            missing = [c for c in codes if float((quotes.get(c) or {}).get("price") or 0) <= 0]
+            if missing:
                 try:
-                    quotes = em.quotes(codes) or {}
+                    quotes.update(em.quotes(missing) or {})
                 except Exception:  # noqa: BLE001
-                    quotes = {}
+                    pass
             hidden = list(cfg().get("review.hidden_days", []) or [])
             rep = review.build(account=acc, days=90, quotes=quotes,
                                hidden_days=hidden)
@@ -209,6 +218,7 @@ class ReviewPage(QWidget):
             rep, quotes = res if isinstance(res, tuple) else (res, {})
             self._rep = rep
             self._quotes = quotes
+            self._dirty = False
             self._render(rep)
 
         def err(e):
@@ -222,6 +232,22 @@ class ReviewPage(QWidget):
         self._tasks = [t for t in self._tasks if t.isRunning()]
         self._tasks.append(r)
         r.start()
+
+    def ensure_loaded(self) -> None:
+        """切到这一页时调用:首次或数据变过才重算。"""
+        if self._rep is None or self._dirty:
+            self.refresh()
+
+    def update_quotes(self, data: dict) -> None:
+        """主窗口行情推送:只记最新价,重算留给切页/手动刷新。"""
+        if not isinstance(data, dict) or not data:
+            return
+        self._live_quotes.update(data)
+        self._dirty = True
+
+    def mark_stale(self) -> None:
+        """交易页成交/撤单后调用:下次进来重算。"""
+        self._dirty = True
 
     def refresh_now(self) -> None:
         self.refresh()
@@ -271,6 +297,18 @@ class ReviewPage(QWidget):
             from ..engine import daily_review as dr
             acc = rep.get("account")
             acc = None if (not acc or acc == "全部账户") else acc
+            # 先把当前账户权益写进今日快照:当日盈亏 = 今日权益 - 上一日权益,
+            # 快照停在「上次下单那一刻」的话,这个数就是旧的。
+            try:
+                gw = self.gw
+                if gw is not None:
+                    a = gw.account()
+                    dr.snapshot(gw.account_name,
+                                equity=float(a.get("total") or 0),
+                                cash=float(a.get("cash") or 0),
+                                market_value=float(a.get("market_value") or 0))
+            except Exception:  # noqa: BLE001
+                pass
             pnl = dr.report(acc, quotes=getattr(self, "_quotes", None))
             t = (pnl.get("pnl") or {}).get("total")
             self.st_today.set(

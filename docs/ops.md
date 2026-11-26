@@ -22,6 +22,26 @@
 所以「策略被判 suspend、只平不新开」这件事,只有在真的执行时才会体现。
 要给自动交易加定时,得新建一个计划任务指向 pilot,这是改交易行为,需要你确认。
 
+## 一之三、AutoPilot 的执行频率
+
+当前配置:`check_seconds=10`、`max_runs_per_day=0`(0 = **不限次**)、窗口 09:30~15:00。
+也就是整个交易时段每 10 秒尝试执行一次 —— 多数轮次因为「目标已满足」不会下单,
+但每轮都会取行情、算策略。今天实际只产生了一批下单(09:30:38)。
+
+想降负载/降换手,把「每日次数」设成 3~6 即可(界面或 `autotrade.max_runs_per_day`)。
+这属于改交易行为,改之前先想清楚要不要盘中多次进场。
+
+## 一之四、auto_mode 下止损不是「界面填的 2%」
+
+界面上「止损 2%」在 `auto_mode` 打开时只是**缩放基准**,真实止损由 ATR 决定:
+
+```
+止损 = clamp(2.5 × ATR20, 3%, 12%)    止盈 = 2.5 × 止损
+```
+
+例:今天持仓 301583 的 ATR20 是 9.72% → 止损被夹到 **12%**,所以它跌到 −6.24%
+也不会卖。想用固定百分比止损,得关掉 `auto_mode`(或调 `autopilot` 的 atr_mult/sl_ceil)。
+
 ## 二、早上先跑这两条
 
 ```bash
@@ -274,4 +294,41 @@ for r in rows: print(r['code'], r['side'], r['n'])
 1. 确认主程序重启过 —— Python 进程不重启不会加载新代码
 2. 查 `logs/maintain-*.log` 看跑的是哪个版本
 3. 看 `sl_tranche` 表有没有残留状态(`TranchePlanner.clear()` 可清)
+
+### 2026-11-26 的实际情况
+
+查了进程列表:**主程序当时没在跑**。当天 45 笔全部集中在 09:30~09:39
+(9 分钟内),之后没有任何委托 —— 说明早盘跑完就停了。
+
+所以修复没生效不是代码问题,是**进程没重启**。代码已确认:
+
+```python
+# selflearn.py:613
+# 卖出不分批 —— 一次卖干净。
+qty = int(avail // min_qty * min_qty)
+```
+
+单测也过了(`plan_sell(3300)` → `{'qty': 3300, 'tranches': 1}`)。
+
+**下次启动主程序就会加载新代码。** 验证方法:
+
+```bash
+# 1 确认进程启动时间晚于修复时间
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+  Where-Object { $_.CommandLine -like '*run.py*' } |
+  Select-Object ProcessId, CreationDate
+
+# 2 收盘后看卖出笔数
+python -c "
+import sys, time; sys.path.insert(0,'.')
+from quantlab.data.store import store
+start = time.time() - (time.time() % 86400)
+rows = store().conn.execute(
+    'select code, side, count(*) n from orders where ts>=? '
+    'group by code, side order by n desc limit 10', (start,)).fetchall()
+for r in rows: print(r['code'], r['side'], r['n'])
+"
+```
+
+**判断标准**:同一只票卖出笔数从 8~10 降到 1~2。
 
