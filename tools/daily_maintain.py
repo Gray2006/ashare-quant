@@ -306,6 +306,88 @@ def step_equity(fp) -> None:
         log(f"  失败:{type(e).__name__}: {str(e)[:120]}", fp)
 
 
+def backup_payload(account: str, acc: dict, positions: list[dict]) -> dict:
+    """模拟账户当日快照(纯函数,便于测试)。"""
+    return {"account": account,
+            "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "cash": float(acc.get("cash") or 0),
+            "market_value": float(acc.get("market_value") or 0),
+            "total": float(acc.get("total") or 0),
+            "positions": [{"code": p.get("code"), "name": p.get("name"),
+                           "qty": int(p.get("qty") or 0),
+                           "cost": float(p.get("cost") or 0)}
+                          for p in positions]}
+
+
+def prune_backups(folder, keep: int = 30) -> int:
+    """只留最近 keep 份备份,返回删掉几个。"""
+    from pathlib import Path as _P
+    files = sorted(_P(folder).glob("sim-*.json"))
+    drop = files[:-int(keep)] if int(keep) > 0 else []
+    for f in drop:
+        try:
+            f.unlink()
+        except Exception:  # noqa: BLE001
+            pass
+    return len(drop)
+
+
+def cleanup_tranche_state(days: int = 7) -> int:
+    """清掉过期的分批状态(账户被重置/换策略后留下的孤儿行)。"""
+    from quantlab.data.store import store as _store
+    cut = time.time() - int(days) * 86400
+    try:
+        with _store().conn as c:
+            cur = c.execute("DELETE FROM sl_tranche WHERE updated < ?", (cut,))
+            return int(cur.rowcount or 0)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def step_backup(fp) -> None:
+    """把模拟账户的持仓和现金存一份,防止被误删/误重置后无从对账。"""
+    log("⑩ 账户备份…", fp)
+    try:
+        import json as _json
+
+        from quantlab.broker.sim import SimGateway
+        from quantlab.config import cfg as _cfg
+        from quantlab.data.store import store as _store
+
+        gw = SimGateway(strict_hours=False)
+        used = {str(r["account"]) for r in _store().conn.execute(
+            "SELECT DISTINCT account FROM positions WHERE qty>0").fetchall()}
+        cfg_acc = str((_cfg().get("autotrade") or {}).get("account") or "")
+        if cfg_acc:
+            used.add(cfg_acc)
+        names = pick_accounts(gw.list_accounts(), used)
+        if not names:
+            log("  没有需要备份的账户,跳过", fp)
+            return
+        n = cleanup_tranche_state(7)
+        if n:
+            log(f"  清理过期分批状态 {n} 条", fp)
+        folder = ROOT / "data" / "backups"
+        folder.mkdir(parents=True, exist_ok=True)
+        day = time.strftime("%Y-%m-%d")
+        for name in names:
+            try:
+                gw.switch_account(name)
+                acc = gw.account()
+                pos = [{"code": p.code, "name": p.name, "qty": p.qty,
+                        "cost": p.cost} for p in gw.positions()]
+                payload = backup_payload(name, acc, pos)
+                (folder / f"sim-{day}-{name}.json").write_text(
+                    _json.dumps(payload, ensure_ascii=False, indent=1),
+                    encoding="utf-8")
+                log(f"  {name}:{len(pos)} 只持仓 / 总 {payload['total']:,.0f}", fp)
+            except Exception as e:  # noqa: BLE001
+                log(f"  {name} 备份失败:{str(e)[:80]}", fp)
+        prune_backups(folder, keep=30)
+    except Exception as e:  # noqa: BLE001
+        log(f"  失败:{type(e).__name__}: {str(e)[:120]}", fp)
+
+
 def step_hypothesis(fp) -> None:
     """LLM 假设生成(默认关;config hypothesis.daily > 0 才跑)。"""
     log("⑧ LLM 假设生成…", fp)
@@ -357,6 +439,8 @@ def main() -> int:
     ap.add_argument("--intraday-top", type=int, default=300)
     ap.add_argument("--skip-promote", action="store_true",
                     help="跳过观察池每日检查")
+    ap.add_argument("--skip-backup", action="store_true",
+                    help="跳过模拟账户备份")
     ap.add_argument("--skip-hypothesis", action="store_true",
                     help="跳过 LLM 假设生成(默认按 config 开关)")
     ap.add_argument("--skip-equity", action="store_true",
@@ -398,6 +482,8 @@ def main() -> int:
             run("hypothesis", step_hypothesis)
         if not args.skip_equity:
             run("equity", step_equity)
+        if not args.skip_backup:
+            run("backup", step_backup)
         if failed:
             log(f"完成(失败 {len(failed)} 步:{'、'.join(failed)})", fp)
             return 1
