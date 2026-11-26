@@ -137,19 +137,16 @@ DEFAULTS: dict = {
         # 2026-11-26 默认从 0 改成 0.15 —— 实测 603389 在 2 小时内被买 36 次、
         # 36 次全亏(均值 -5.11%),仓位 0.06 出现 24 次,就是碎单连买。
         # 0.15 的意思是「差额不到目标 15% 就不补」,不是关掉补仓。
-        "target_hysteresis_pct": 0.15,
-    },
+        "target_hysteresis_pct": 0.15},
     # LLM 假设生成:给 factor_mine 提新表达式(只提假设,不碰数据/不下单)
     "hypothesis": {
         "llm": {"base_url": "", "model": "", "api_key_env": ""},
-        "daily": 0,
-    },
+        "daily": 0},
     # 因子搜索空间预算:按天计。日线价量那条线已用 45+34 个因子证伪,
     # 默认预算 0;真挖到东西了 factor_space 会按通过率自己改判。
     "factor_mine": {
         "space_budget": {"minute_micro": 60, "financial_pit": 20,
-                         "alt_data": 20, "event": 10, "daily_ohlcv": 0},
-    },
+                         "alt_data": 20, "event": 10, "daily_ohlcv": 0}},
     # 观察池:promoted 因子 → 候选策略 → 前推 + FDR → eligible → 人工提升
     "promote": {"enabled": True, "need_good": 3, "max_fails": 6,
                 "horizon": 5, "top_n": 5, "min_excess_t": 2.0, "alpha": 0.05,
@@ -211,9 +208,7 @@ DEFAULTS: dict = {
             "consec_loss_soft": 4,
             "consec_loss_hard": 8,
             "max_opens_per_day": 20,
-            "cooldown_minutes": 60,
-        },
-    },
+            "cooldown_minutes": 60}},
     # 云端研究接口(收费服务)。关掉时全部走本地,不影响任何现有功能。
     # key 不在这里,单独存 USER_DIR/cloud.key(DPAPI 加密)
     # base_url 留空 = 没配地址,不连。
@@ -222,16 +217,12 @@ DEFAULTS: dict = {
     "cloud": {"enabled": False, "base_url": "", "timeout": 30},
     # 数据回流:默认关。开启后才上传脱敏后的决策/结果/参数,不发金额和凭据。
     "feedback": {"enabled": False, "interval": 1800, "batch": 200},
-    # cloud_page:多一页「云端」—— 看别人回传的群体先验和云端学习成果。
-    # 默认关:只有想看的这台机器打开,发给别人的包里不出现这一页。
-    "ui": {"theme": "dark", "start_page": "quote", "font_size": 12,
-           "cloud_page": False},
+    "ui": {"theme": "dark", "start_page": "quote", "font_size": 12},
     "broker": {
         # 公开版只有本地模拟撮合(README/PRIVACY 口径:不含券商、同花顺、真单)
         "mode": "sim",
         # 费率默认值和 FEE_DEFAULTS 同源,别在这儿再抄一遍
-        "sim": {"initial_cash": 1_000_000.0, **FEE_DEFAULTS},
-    },
+        "sim": {"initial_cash": 1_000_000.0, **FEE_DEFAULTS}},
     "risk": {
         "max_order_amount": 50_000.0,
         "max_daily_orders": 30,
@@ -239,8 +230,7 @@ DEFAULTS: dict = {
         "max_position_ratio": 0.35,
         "forbid_limit_up_buy": True,
         "forbid_limit_down_sell": True,
-        "allow_outside_trading_hours": False,
-    },
+        "allow_outside_trading_hours": False},
     "screener": {
         "presets": [
             {"name": "主力抢筹", "expr": "main_inflow > 3e7 and pct_chg > 0 and pct_chg < 7 and turnover > 1 and turnover < 15",
@@ -260,8 +250,7 @@ DEFAULTS: dict = {
         "benchmark": "000300",
         "universe": "hs300",
         "max_positions": 10,
-        "per_position_pct": 0.09,
-    },
+        "per_position_pct": 0.09},
     # 按历史走势自定义策略:buy/sell 是条件表达式(见 engine/rules.py)
     "rules": [
         {"name": "均线多头", "desc": "站上 20 日线且 5 日线在 20 日线上方买入,跌破 20 日线卖出",
@@ -317,8 +306,7 @@ DEFAULTS: dict = {
         "capital_filter": True,
         "capacity_pct": 0.05,
         "min_market_cap": 5e9,
-        "min_list_days": 250,
-    },
+        "min_list_days": 250},
     # 外盘 / 国际新闻
     "world": {"refresh_seconds": 8, "news_count": 40},
     # 走势预判:池子大小、回看长度、周期
@@ -326,8 +314,7 @@ DEFAULTS: dict = {
     # 新版本通知:url 指向自己托管的 update.json,留空就不检查。
     # public_key:Ed25519 公钥(base64),没有就不信任任何更新清单(2026-11-22 审计 C1)。
     "update": {"enabled": True, "url": "", "public_key": "",
-               "check_on_start": True, "timeout": 5.0},
-}
+               "check_on_start": True, "timeout": 5.0}}
 
 
 def _safe_cloud_url(url: str) -> str:
