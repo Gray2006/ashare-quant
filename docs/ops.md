@@ -42,6 +42,27 @@
 例:今天持仓 301583 的 ATR20 是 9.72% → 止损被夹到 **12%**,所以它跌到 −6.24%
 也不会卖。想用固定百分比止损,得关掉 `auto_mode`(或调 `autopilot` 的 atr_mult/sl_ceil)。
 
+## 一之四、auto_mode 下止损止盈不是 config 里那个数
+
+`autotrade.auto_mode=True` 时,每只票的止损止盈由 **ATR** 决定:
+
+```
+止损 = clamp(ATR% × 2.5, 3%, 12%)
+止盈 = clamp(止损 × 2.5, ..., 30%)
+```
+
+实测(2026-11-26 持仓):
+
+| 代码 | ATR | 止损 | 止盈 |
+|---|---|---|---|
+| 600519 | 2.47% | 6.2% | 15.5% |
+| 601138 | 6.58% | 12.0% | 30.0% |
+| 301583 | 9.72% | 12.0% | 30.0% |
+
+config 里的 `stop_loss_pct=2.0` / `take_profit_pct=10` **不是实际止损**,只是
+「学习调参的基准比例」:学习把止损从 2% 调到 1.6% 时,ATR 算出的阈值会乘 0.8。
+要看真实止损,看这里或界面上的「止损/止盈」列。
+
 ## 二、早上先跑这两条
 
 ```bash
@@ -103,6 +124,16 @@ python -c "from quantlab.config import cfg; cfg().set('selflearn.attribution_day
 # 或临时关掉自动暂停(只写建议)
 python -c "from quantlab.config import cfg; cfg().set('selflearn.auto_suspend', False, save=True)"
 ```
+
+## 四之三、测试账户隔离
+
+`conftest.py` 在 pytest 启动时把 `QUANT_SIM_ACCOUNT` 设成 `_pytest`,于是测试里
+随手 `SimGateway()` 都落在 `_pytest` 账户,不会碰「默认账户」。
+
+另外 `SimGateway` 加了保护:对「默认账户」和 config 里在用的账户,
+`delete_account()` 返回拒绝、`reset()` 抛异常,除非显式 `force=True`。
+
+跑真实账户的脚本(selftest_*、tools/*)不经过 pytest,不受影响。
 
 ## 五、测试
 
@@ -331,4 +362,71 @@ for r in rows: print(r['code'], r['side'], r['n'])
 ```
 
 **判断标准**:同一只票卖出笔数从 8~10 降到 1~2。
+
+
+## 七、归因系统曾经完全没工作(2026-11-26 修)
+
+### 现象
+
+`learn_status` 显示:
+
+```
+multifactor: n=393, 扣费均值 -2.16%/笔, t=-7.46 → suspend(×0.5)
+wfmulti:     n=31,  扣费均值 -2.28%/笔, t=-2.16 → suspend(×0.5)
+```
+
+**建议暂停**,但实盘照跑不误。查下去发现三层问题叠在一起。
+
+### 三层根因
+
+**第一层:账户名对不上**
+
+```
+orders 表账户分布:'默认账户' 524 条、'default' 1 条
+sl_decisions:'默认账户' 333 条、'量化' 134 条
+```
+
+实盘写库用「默认账户」(中文),但 `ParamTuner` 传的是 `'default'`。
+`_fetch('default', 90)` 返回 **0 条** → `state_of` 返回空、`tuner_mult` 返回 1.0。
+
+**第二层:样本不足时提前返回**
+
+```python
+if n < self.MIN_SAMPLES:
+    shr = self._prior_shrink(out, n)
+    if shr:
+        return {...}      # ← 提前返回,归因被跳过
+```
+
+实盘本地样本常年 `n=0`,所以每次都走这条路径,**归因永远不执行**。
+
+**第三层:cfg() 单例不刷新**
+
+`auto_suspend` 从 False 改成 True 后,运行中的进程还是读到 False ——
+`cfg()` 在进程启动时加载一次,之后改文件不刷新。
+
+### 修法
+
+1 `strategy_review._build_with_fallback`:精确匹配为空时回退全账户,
+  并在 why 里写明「账户名 X 无记录,按全账户算」
+2 `_decide`:先验收缩之后**仍要跑归因** —— 归因是风控信号,不该被样本量挡住
+3 `_attr_adjust`:直接读 `config.json` 文件,不用 `cfg()` 单例
+
+### 验证
+
+```python
+ParamTuner('default', 'multifactor').tune({...})
+# 修复前:per_position_pct=0.04, strategy_halt=None
+# 修复后:per_position_pct=0.0,  strategy_halt=True
+```
+
+**现在 `multifactor` 会真的停(只平不新开)。**
+
+### 教训
+
+**「归因说该停」和「真的停了」是两件事。** 中间隔着账户名、样本量、
+配置刷新三道坎,任何一道断了,风控就是摆设。
+
+以后加风控逻辑,必须端到端验证「判出来 → 真的生效」,
+不能只看 `learn_status` 的建议文字。
 

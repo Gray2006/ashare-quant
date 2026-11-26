@@ -25,6 +25,9 @@ ENFORCE: list[tuple[str, object, str]] = [
      "单票当日买入上限,总笔数限制拦不住集中"),
     ("risk.max_daily_orders", 30,
      "全局限次,防止一天几十笔碎单"),
+    ("selflearn.auto_suspend", True,
+     "归因判 suspend 时真的停:multifactor t=-7.46/393 笔、wfmulti t=-2.16,"
+     "继续跑就是持续亏钱"),
 ]
 
 

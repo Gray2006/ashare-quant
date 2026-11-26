@@ -775,8 +775,18 @@ class ParamTuner:
         """
         changed, why = False, []
         try:
-            from ..config import cfg as _cfg
-            sc = _cfg().get("selflearn") or {}
+            # 直接读 config.json,不用 cfg() 单例 ——
+            # 单例在进程启动时加载一次,之后改文件不刷新,
+            # 导致 auto_suspend 从 False 改成 True 后运行中的进程读不到。
+            try:
+                import json as _json
+                from pathlib import Path as _P
+                _cfg_path = _P(__file__).resolve().parents[2] / "config.json"
+                sc = (_json.loads(_cfg_path.read_text(encoding="utf-8"))
+                      .get("selflearn") or {})
+            except Exception:  # noqa: BLE001
+                from ..config import cfg as _cfg
+                sc = _cfg().get("selflearn") or {}
             if not bool(sc.get("attribution", True)):
                 return changed, why
             from . import strategy_review as sr
@@ -811,8 +821,22 @@ class ParamTuner:
         if n < self.MIN_SAMPLES:
             shr = self._prior_shrink(out, n)
             if shr:
+                # 先验收缩之后仍要跑归因 —— 归因是风控信号,不该被样本量挡住。
+                # 实盘本地样本常年 n=0,原来这里提前返回,导致 auto_suspend
+                # 和仓位降权全部失效(2026-11-26 发现)。
+                em = dict(shr["params"])
+                ch_em, why_em = self._attr_adjust(em, self.STEP)
+                if ch_em:
+                    return {"params": em, "changed": True, "n": n,
+                            "reason": shr["reason"] + " · 归因:"
+                                      + ";".join(why_em), "score": 0.0}
                 return {"params": shr["params"], "changed": True, "n": n,
                         "reason": shr["reason"], "score": 0.0}
+            em = dict(out)
+            ch_em, why_em = self._attr_adjust(em, self.STEP)
+            if ch_em:
+                return {"params": em, "changed": True, "n": n,
+                        "reason": "归因:" + ";".join(why_em), "score": 0.0}
             return {"params": out, "changed": False, "n": n,
                     "reason": f"样本 {n} 条,不足 {self.MIN_SAMPLES} 条,参数不动"}
 
