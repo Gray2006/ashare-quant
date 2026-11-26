@@ -32,6 +32,39 @@ def log(msg: str, fp=None) -> None:
         fp.flush()
 
 
+def step_config(fp) -> None:
+    """⓪ 配置守护:强制修正关键配置项。
+
+    2026-11-26 踩过:selflearn.target_hysteresis_pct 改成 0.15 后,
+    某个进程内存里还是旧值,保存配置时又覆盖回 0.0。
+    只改文件不够,得每次维护都跑一遍。
+    """
+    log("⓪ 配置守护…", fp)
+    try:
+        # 直接读写 config.json,不用 cfg() 单例 ——
+        # 单例在 set+save 后同一进程内 get 仍可能拿到旧值(2026-11-26 实测)
+        from tools.enforce_config import ENFORCE, _get, _load, _set
+        data = _load()
+        if not data:
+            log("  config.json 读不到", fp)
+            return
+        bad = [(k, _get(data, k), w) for k, w, _ in ENFORCE
+               if _get(data, k) != w]
+        if not bad:
+            log(f"  {len(ENFORCE)} 项全部正确", fp)
+            return
+        for k, got, want in bad:
+            log(f"  {k}: {got!r} → {want!r}", fp)
+            _set(data, k, want)
+        from tools.enforce_config import CONFIG
+        import json
+        CONFIG.write_text(json.dumps(data, ensure_ascii=False, indent=2),
+                          encoding="utf-8")
+        log(f"  已修正 {len(bad)} 项", fp)
+    except Exception as e:  # noqa: BLE001
+        log(f"  配置守护失败:{type(e).__name__}: {str(e)[:120]}", fp)
+
+
 def step_snapshot(fp) -> None:
     log("① 补全当日日线…", fp)
     try:
@@ -123,7 +156,8 @@ def step_min5(fp, top: int = 300) -> None:
     try:
         import time as _t
 
-        from tools.fetch_min5 import fetch, top_liquid
+        from tools.fetch_min5 import (codes_with_min5, fetch, merge_sticky,
+                                      top_liquid)
 
         from quantlab.data.store import store
 
@@ -131,6 +165,12 @@ def step_min5(fp, top: int = 300) -> None:
         if not codes:
             log("  取不到票列表", fp)
             return
+        # 并上已经有历史的票:流动性轮换会让人断档,覆盖不连贯
+        sticky = codes_with_min5(min_days=5, limit=150)
+        merged = merge_sticky(codes, sticky)
+        if len(merged) > len(codes):
+            log(f"  并上 {len(merged) - len(codes)} 只有历史的票(共 {len(merged)} 只)", fp)
+        codes = merged
         st = store()
         ok, fail = 0, 0
         for i, code in enumerate(codes, 1):
@@ -149,6 +189,161 @@ def step_min5(fp, top: int = 300) -> None:
         log(f"  失败:{type(e).__name__}: {str(e)[:120]}", fp)
 
 
+def step_intraday(fp, top: int = 300) -> None:
+    """补小时线(scale=60,约 1 年窗口)。默认不跑:日内结构空间已证否,
+    只有还想继续挖这个信息集时才加 --intraday。"""
+    log(f"⑥ 补小时线(成交额前 {top} 只)…", fp)
+    try:
+        import time as _t
+
+        from tools.fetch_min5 import fetch, top_liquid
+
+        from quantlab.data.store import store
+
+        codes = top_liquid(top, skip_fetched=False, scale=60)
+        if not codes:
+            log("  取不到票列表", fp)
+            return
+        st = store()
+        ok, fail = 0, 0
+        for i, code in enumerate(codes, 1):
+            try:
+                bars = fetch(code, scale=60)
+                if bars:
+                    st.save_kline(code, 60, 1, bars)
+                    ok += 1
+            except Exception:  # noqa: BLE001
+                fail += 1
+            if i % 50 == 0:
+                log(f"  {i}/{len(codes)} 成功 {ok} 失败 {fail}", fp)
+            _t.sleep(0.3)
+        log(f"  完成:{ok}/{len(codes)}", fp)
+    except Exception as e:  # noqa: BLE001
+        log(f"  失败:{type(e).__name__}: {str(e)[:120]}", fp)
+
+
+def pick_accounts(names: list[str], used: set[str]) -> list[str]:
+    """要快照的账户:在用的那些。测试户(selftest/fee-test)自动排除。"""
+    keep = []
+    for n in names:
+        n = str(n)
+        if n in used and n not in ("selftest", "fee-test"):
+            keep.append(n)
+    return keep
+
+
+def looks_reset(equity: float, market_value: float, initial: float,
+                prev_equity: float | None) -> bool:
+    """账户像被重置了吗:现金回到初始、无持仓,而昨天不是这个状态。
+
+    模拟账户被测试代码删了重建时,现金会回到初始值、持仓清空 —— 这种快照
+    写进权益曲线会把回撤/归因带偏,宁可跳过并告警。
+    """
+    if prev_equity is None:
+        return False
+    try:
+        return (abs(float(equity) - float(initial)) < 1.0
+                and abs(float(market_value)) < 1.0
+                and abs(float(prev_equity) - float(initial)) > 1.0)
+    except (TypeError, ValueError):
+        return False
+
+
+def step_equity(fp) -> None:
+    """给模拟账户记一条当日权益快照(离线:持仓 + 收盘价)。"""
+    log("⑨ 权益快照…", fp)
+    try:
+        from quantlab.broker.sim import SimGateway
+        from quantlab.engine import daily_review as dr
+
+        gw = SimGateway(strict_hours=False)
+        # 只快照「有持仓」或「配置里在用的」账户,别把 selftest 之类的测试户也写进去
+        from quantlab.config import cfg as _cfg
+        from quantlab.data.store import store as _store
+        try:
+            used = {str(r["account"]) for r in _store().conn.execute(
+                "SELECT DISTINCT account FROM positions WHERE qty>0").fetchall()}
+        except Exception:  # noqa: BLE001
+            used = set()
+        cfg_acc = str((_cfg().get("autotrade") or {}).get("account") or "")
+        if cfg_acc:
+            used.add(cfg_acc)
+        names = []
+        try:
+            raw = gw.list_accounts()
+            flat = [str(a.get("name") if isinstance(a, dict) else a) for a in raw]
+            names = pick_accounts(flat, used)
+        except Exception:  # noqa: BLE001
+            names = []
+        if not names:
+            log("  没有需要快照的账户,跳过", fp)
+            return
+        for name in names:
+            try:
+                gw.switch_account(name)
+                acc = gw.account()
+                try:
+                    prev = _store().conn.execute(
+                        "SELECT equity FROM sl_equity WHERE account=? "
+                        "ORDER BY day DESC LIMIT 1", (name,)).fetchone()
+                    prev_eq = float(prev["equity"]) if prev else None
+                except Exception:  # noqa: BLE001
+                    prev_eq = None
+                if looks_reset(float(acc.get("total") or 0),
+                               float(acc.get("market_value") or 0),
+                               float(acc.get("initial") or 0), prev_eq):
+                    log(f"  {name}:疑似账户被重置(现金回到初始、无持仓),"
+                        f"跳过本次快照", fp)
+                    continue
+                dr.snapshot(account=name, equity=float(acc.get("total") or 0),
+                            cash=float(acc.get("cash") or 0),
+                            market_value=float(acc.get("market_value") or 0))
+                log(f"  {name}:总 {float(acc.get('total') or 0):,.0f} "
+                    f"现金 {float(acc.get('cash') or 0):,.0f}", fp)
+            except Exception as e:  # noqa: BLE001
+                log(f"  {name} 失败:{str(e)[:80]}", fp)
+    except Exception as e:  # noqa: BLE001
+        log(f"  失败:{type(e).__name__}: {str(e)[:120]}", fp)
+
+
+def step_hypothesis(fp) -> None:
+    """LLM 假设生成(默认关;config hypothesis.daily > 0 才跑)。"""
+    log("⑧ LLM 假设生成…", fp)
+    try:
+        from quantlab.config import cfg
+        n = int((cfg().get("hypothesis") or {}).get("daily") or 0)
+        if n <= 0:
+            log("  未开启(hypothesis.daily=0),跳过", fp)
+            return
+        from quantlab.engine import hypothesis as hy
+        r = hy.run(n=n, dry_run=False)
+        for x in (r.get("audited") or [])[:10]:
+            log(f"  {x.get('status')} raw_t={x.get('raw_t')} {x['expr'][:60]}", fp)
+        log(f"  生成 {r.get('generated')} / 审计 {len(r.get('audited') or [])} "
+            f"/ 跳过 {len(r.get('skipped') or [])}", fp)
+    except Exception as e:  # noqa: BLE001
+        log(f"  失败:{type(e).__name__}: {str(e)[:120]}", fp)
+
+
+def step_promote(fp) -> None:
+    """观察池每日检查(前推 + FDR)。池子空时直接跳过,几乎零成本。"""
+    log("⑦ 观察池检查…", fp)
+    try:
+        from quantlab.engine import promote as pm
+
+        pool = pm.list_pool()
+        if not pool:
+            log("  池子空,跳过", fp)
+            return
+        r = pm.tick()
+        for c in (r.get("checked") or [])[:10]:
+            log(f"  {c.get('name')} ok={c.get('ok')} q={c.get('q')} "
+                f"status={c.get('status')}", fp)
+        log(f"  完成:{r.get('n')} 个候选", fp)
+    except Exception as e:  # noqa: BLE001
+        log(f"  失败:{type(e).__name__}: {str(e)[:120]}", fp)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--skip-snapshot", action="store_true")
@@ -157,6 +352,15 @@ def main() -> int:
     ap.add_argument("--skip-verify", action="store_true")
     ap.add_argument("--skip-min5", action="store_true")
     ap.add_argument("--min5-top", type=int, default=300)
+    ap.add_argument("--intraday", action="store_true",
+                    help="顺手补小时线(默认不跑,日内结构空间已证否)")
+    ap.add_argument("--intraday-top", type=int, default=300)
+    ap.add_argument("--skip-promote", action="store_true",
+                    help="跳过观察池每日检查")
+    ap.add_argument("--skip-hypothesis", action="store_true",
+                    help="跳过 LLM 假设生成(默认按 config 开关)")
+    ap.add_argument("--skip-equity", action="store_true",
+                    help="跳过模拟账户权益快照")
     ap.add_argument("--factor-limit", type=int, default=8)
     args = ap.parse_args()
 
@@ -164,17 +368,39 @@ def main() -> int:
     logdir.mkdir(exist_ok=True)
     fname = time.strftime("maintain-%Y-%m-%d.log")
     fp = open(logdir / fname, "a", encoding="utf-8")
+    failed: list[str] = []
+
+    def run(name: str, fn, *a) -> None:
+        """单步失败只记日志,不中断后面的步骤 —— 夜间任务不能因为一个网络抖动就停摆。"""
+        try:
+            fn(fp, *a)
+        except Exception as e:  # noqa: BLE001
+            failed.append(name)
+            log(f"  ✗ {name} 失败:{type(e).__name__}: {str(e)[:150]}", fp)
+
     try:
+        run("config", step_config)
         if not args.skip_snapshot:
-            step_snapshot(fp)
+            run("snapshot", step_snapshot)
         if not args.skip_lhb:
-            step_lhb(fp)
+            run("lhb", step_lhb)
         if not args.skip_factors:
-            step_factors(fp, args.factor_limit)
+            run("factors", step_factors, args.factor_limit)
         if not args.skip_verify:
-            step_verify(fp)
+            run("verify", step_verify)
         if not args.skip_min5:
-            step_min5(fp, args.min5_top)
+            run("min5", step_min5, args.min5_top)
+        if args.intraday:
+            run("intraday", step_intraday, args.intraday_top)
+        if not args.skip_promote:
+            run("promote", step_promote)
+        if not args.skip_hypothesis:
+            run("hypothesis", step_hypothesis)
+        if not args.skip_equity:
+            run("equity", step_equity)
+        if failed:
+            log(f"完成(失败 {len(failed)} 步:{'、'.join(failed)})", fp)
+            return 1
         log("完成", fp)
         return 0
     finally:
