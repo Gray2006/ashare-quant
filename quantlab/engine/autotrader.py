@@ -81,6 +81,25 @@ class Plan:
         return " · ".join(parts)
 
 
+def apply_learning(tuned: dict, per_pct: float, sl: float, tp: float,
+                   note: str = "") -> tuple[float, float, float, str]:
+    """把 ParamTuner 的结果落到本轮参数上(纯函数,便于测试)。
+
+    strategy_halt 时单票仓位归零 = 只平不新开;止损止盈保持原值。
+    """
+    tuned = tuned or {}
+    params = tuned.get("params") or {}
+    if tuned.get("changed"):
+        per_pct = float(params.get("per_position_pct", per_pct))
+        sl = float(params.get("stop_loss", sl))
+        tp = float(params.get("take_profit", tp))
+        note = "学习:" + str(tuned.get("reason") or "")
+    if params.get("strategy_halt"):
+        per_pct = 0.0
+        note = ((note + " · ") if note else "") + "策略暂停:新开仓预算归零,止损止盈照常"
+    return float(per_pct), float(sl), float(tp), note
+
+
 class AutoTrader:
     """把策略接到模拟盘上。"""
 
@@ -590,16 +609,8 @@ class AutoTrader:
                 tuned = self._sl_tuner.tune({"per_position_pct": per_pct,
                                              "stop_loss": sl_cfg,
                                              "take_profit": tp_cfg})
-                if tuned.get("changed"):
-                    per_pct = float(tuned["params"]["per_position_pct"])
-                    sl_cfg = float(tuned["params"]["stop_loss"])
-                    tp_cfg = float(tuned["params"]["take_profit"])
-                    sl_note = "学习:" + str(tuned.get("reason") or "")
-                # 策略归因判暂停且开了 auto_suspend:新开仓预算归零(只平不新开)
-                if (tuned.get("params") or {}).get("strategy_halt"):
-                    per_pct = 0.0
-                    sl_note = ((sl_note + " · ") if sl_note else "") + \
-                        "策略暂停:新开仓预算归零,止损止盈照常"
+                per_pct, sl_cfg, tp_cfg, sl_note = apply_learning(
+                    tuned, per_pct, sl_cfg, tp_cfg, sl_note)
             except Exception as e:  # noqa: BLE001
                 sl_note = f"学习参数回退:{e}"
 
