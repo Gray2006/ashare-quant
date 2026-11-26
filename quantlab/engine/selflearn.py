@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""私有自适应学习引擎。**不对外**:不进服务端,不暴露 HTTP。
+"""私有自适应学习引擎。**不对外**:不进 gray-service,不暴露 HTTP。
 
 三件事,分开看:
 
@@ -159,6 +159,16 @@ class DecisionLog:
                name: str = "", tranche: int = 1, tranches: int = 1,
                strength: float = 0.0, market: str = "",
                params: dict | None = None, note: str = "") -> int:
+        # 口径留痕:写库用的策略名和 config 不一致时,把配置名记进 note。
+        # 报告按 config 过滤、交易按实例写库 —— 两者不一致时,以前只能靠猜
+        # (2026-11-25 日报 0 条就是这个)。这里不改行为,只让下次能一眼看出来。
+        try:
+            from ..config import cfg as _c
+            want = str((_c().get("autotrade") or {}).get("strategy") or "")
+            if want and want != (self.strategy or ""):
+                note = ((note + " · ") if note else "") + f"配置策略={want}"
+        except Exception:  # noqa: BLE001
+            pass
         st = _db()
         with st.conn as c:
             cur = c.execute(
@@ -416,6 +426,25 @@ class DecisionLog:
 
 
 # ---------------------------------------------------------------- 分批执行
+def topup_ok(want_qty: int, held_qty: int, min_qty: int = 100,
+             hysteresis_pct: float = 0.0) -> bool:
+    """这笔补单值不值得做。
+
+    目标仓位每轮按「权益 × 权重」重算,权益一涨目标就变大 → 2/2 完成后又
+    从头分批,变成小单连买(2026-11-25 实测 002086 一天 6 笔)。
+    hysteresis_pct > 0 时,差额不到目标的这个比例就不新开计划;默认 0 = 关,
+    保持原行为,等主人决定要不要开。
+    """
+    want = int(want_qty or 0)
+    held = int(held_qty or 0)
+    delta = want - held
+    if delta < max(1, int(min_qty or 1)):
+        return False
+    if hysteresis_pct and float(hysteresis_pct) > 0:
+        return delta >= float(want) * float(hysteresis_pct)
+    return True
+
+
 class TranchePlanner:
     """把目标仓位拆成多笔。状态落库,重启不重来。"""
 
@@ -457,6 +486,23 @@ class TranchePlanner:
                  float(cur.get("created") or time.time()),
                  float(cur.get("updated") or time.time())))
 
+    @staticmethod
+    def _same_day(ts: float, now: float | None = None) -> bool:
+        import datetime as _dt
+        if not ts:
+            return False
+        a = _dt.datetime.fromtimestamp(float(ts)).date()
+        b = _dt.datetime.fromtimestamp(float(now or time.time())).date()
+        return a == b
+
+    @staticmethod
+    def _replan_tolerance() -> float:
+        try:
+            from ..config import cfg
+            return float((cfg().get("selflearn") or {}).get("replan_tolerance", 0.05))
+        except Exception:  # noqa: BLE001
+            return 0.05
+
     def _drop(self, code: str, side: str) -> None:
         st = _db()
         with st.conn as c:
@@ -482,9 +528,18 @@ class TranchePlanner:
         want = int(want_qty or 0)
         held = int(held_qty or 0)
         if want <= held:
-            self._drop(code, "buy")
+            # 保留「今天已建仓」标记:否则这一轮删掉、下一轮目标稍涨又重开计划,
+            # 同一天内还是碎单连买。
+            st0 = self._get(code, "buy")
+            done0 = int((st0 or {}).get("done_tranches") or 0)
+            need0 = int((st0 or {}).get("tranches") or 1)
+            keep = (st0 is not None and done0 >= need0
+                    and self._same_day(float(st0.get("updated") or 0)))
+            if not keep:
+                self._drop(code, "buy")
             return {"qty": 0, "tranche": 0, "tranches": 0,
-                    "done": held, "target": want, "why": "已达标"}
+                    "done": held, "target": want,
+                    "why": "今日已建仓" if keep else "已达标"}
 
         room = want - held
         floor = self.MIN_AMOUNT if min_amount is None else float(min_amount)
@@ -498,6 +553,19 @@ class TranchePlanner:
                     "done": held + qty, "target": want, "why": "金额小,不拆"}
 
         st = self._get(code, "buy")
+        # 同一天里计划已经跑完,就别因为「目标随权益/价格漂移」再开一轮:
+        # 否则每轮都重来一次 1/2、2/2,变成碎单连买(2026-11-25 实测)。
+        if st and int(st.get("done_tranches") or 0) >= int(st.get("tranches") or 1):
+            tol = float(self._replan_tolerance())
+            old_target = int(st.get("target_qty") or 0)
+            same_day = self._same_day(float(st.get("updated") or 0))
+            moved = (old_target > 0
+                     and abs(want - old_target) / float(old_target) > tol)
+            if same_day and not moved:
+                return {"qty": 0, "tranche": 0, "tranches": 0, "done": held,
+                        "target": want, "why": "今日已建仓"}
+            self._drop(code, "buy")
+            st = None
         if not st:
             first, n = self._ladder(strength)
             self._put(code, "buy", target_qty=want, done_qty=held,
@@ -520,10 +588,12 @@ class TranchePlanner:
 
         self._put(code, "buy", target_qty=want, done_qty=held + qty,
                   tranches=n, done_tranches=done_t, strength=strength)
-        if held + qty >= want:
-            self._drop(code, "buy")
+        # 跑完不删,留个「今天已经建好仓」的标记;明天或目标变动超过容差才重开
+        # strength 要带出去:调用方记 DecisionLog 时用它。
+        # 以前没带,日志里永远是兜底值 0.5(2026-11-25 修)。
         return {"qty": qty, "tranche": done_t, "tranches": n,
-                "done": held + qty, "target": want, "why": ""}
+                "done": held + qty, "target": want, "why": "",
+                "strength": float(strength or 0.0)}
 
     def plan_sell(self, code: str, avail_qty: int, strength: float = 0.0,
                   min_qty: int = 100, price: float = 0.0,
@@ -540,32 +610,17 @@ class TranchePlanner:
             return {"qty": avail, "tranche": 1, "tranches": 1,
                     "why": "金额小,不拆"}
 
-        st = self._get(code, "sell")
-        if not st:
-            self._put(code, "sell", target_qty=avail, done_qty=0,
-                      tranches=self.SELL_TRANCHES, done_tranches=0,
-                      strength=strength)
-            qty = max(min_qty, int(avail * self.SELL_FIRST // min_qty * min_qty))
-        else:
-            n = max(1, int(st.get("tranches") or 1))
-            qty = max(min_qty, int(avail / n // min_qty * min_qty))
-
-        done_t = int((st or {}).get("done_tranches") or 0) + 1
-        n = int((st or {}).get("tranches") or self.SELL_TRANCHES)
-        # 最后一批清干净。按 avail/n 算会一直卖一半,永远剩个尾巴。
-        if done_t >= n:
-            qty = avail
-        qty = min(qty, avail)
-        qty = int(qty // min_qty * min_qty)
+        # 卖出不分批 —— 一次卖干净。
+        # 原来按 avail*0.6 递减、状态又被 _drop 清掉,导致每轮都从「第一次」
+        # 开始,实测 002579 卖 10 笔才清完 3300 股(2026-11-26)。
+        # 卖出是降风险动作,分批只会多付佣金,没有好处。
+        qty = int(avail // min_qty * min_qty)
         if qty < min_qty:
             self._drop(code, "sell")
-            return {"qty": 0, "tranche": 0, "tranches": 0, "why": "剩余不足一手"}
-
-        self._put(code, "sell", target_qty=avail, done_qty=qty,
-                  tranches=n, done_tranches=done_t, strength=strength)
-        if qty >= avail:
-            self._drop(code, "sell")
-        return {"qty": qty, "tranche": done_t, "tranches": n, "why": ""}
+            return {"qty": 0, "tranche": 0, "tranches": 1,
+                    "why": "剩余不足一手"}
+        self._drop(code, "sell")
+        return {"qty": qty, "tranche": 1, "tranches": 1, "why": ""}
 
     def clear(self, code: str | None = None) -> None:
         st = _db()
@@ -594,6 +649,14 @@ class TranchePlanner:
 
 
 # ---------------------------------------------------------------- 参数迭代
+def _attr_days(sc: dict) -> int:
+    """归因窗口天数:窗口越长,判死后冻结越久。"""
+    try:
+        return int((sc or {}).get("attribution_days") or 90)
+    except (TypeError, ValueError):
+        return 90
+
+
 class ParamTuner:
     """按历史表现调参数。有滞回,可追溯。"""
 
@@ -704,6 +767,42 @@ class ParamTuner:
         return {"params": out,
                 "reason": f"本地样本 {n} 条不足,按群体先验收缩:" + "、".join(parts)}
 
+    def _attr_adjust(self, out: dict, step: float) -> tuple[bool, list[str]]:
+        """策略归因:仓位乘数 + 真暂停。返回 (是否改动, 说明)。
+
+        单独抽出来是为了让「紧急降权」能绕过调参间隔(MIN_GAP):
+        策略已经被判失效时,不该因为「上一条参数刚调过」而排队等 20 条决策。
+        """
+        changed, why = False, []
+        try:
+            from ..config import cfg as _cfg
+            sc = _cfg().get("selflearn") or {}
+            if not bool(sc.get("attribution", True)):
+                return changed, why
+            from . import strategy_review as sr
+            mult, sry = sr.tuner_mult(self.account, self.strategy,
+                                      days=_attr_days(sc))
+            if mult != 1.0 and sry:
+                p = float(out.get("per_position_pct") or 0.1)
+                np_ = max(0.02, min(0.30, p * float(mult)))
+                if abs(np_ - p) / max(p, 1e-9) >= step * 0.5:
+                    out["per_position_pct"] = round(np_, 4)
+                    changed = True
+                    why.append(f"策略归因:{sry}(仓位 {p:.1%}→{np_:.1%})")
+            # 真暂停:auto_suspend 打开且归因判 suspend 时,单票仓位归零。
+            # 不开这个开关就只是建议 —— 停策略是不可逆的大动作,默认交给人。
+            if bool(sc.get("auto_suspend", False)):
+                state = sr.state_of(self.account, self.strategy)
+                if state == "suspend":
+                    out["per_position_pct"] = 0.0
+                    out["strategy_halt"] = True
+                    changed = True
+                    why.append("策略归因判暂停(auto_suspend):单票仓位归零,"
+                               "只平不新开")
+        except Exception:  # noqa: BLE001
+            pass
+        return changed, why
+
     def _decide(self, base: dict) -> dict:
         """算一遍参数建议。base 键:per_position_pct / stop_loss / take_profit"""
         out = dict(base)
@@ -723,6 +822,15 @@ class ParamTuner:
             # 窗口封顶 60 条后 n 不再增长,相减会永远小于 MIN_GAP,调参永久卡死。
             since = self.log.count_since(float(last.get("ts") or 0))
             if since < self.MIN_GAP:
+                # 归因判降权/暂停不该排队:风控信号优先于「调参间隔」。
+                # 只放行「往下降」,升权仍然要等间隔(上和下不对称)。
+                em = dict(out)
+                ch_em, why_em = self._attr_adjust(em, self.STEP)
+                if ch_em and (float(em.get("per_position_pct") or 0)
+                              < float(out.get("per_position_pct") or 0)):
+                    return {"params": em, "changed": True, "n": n,
+                            "reason": "紧急降权(不受调参间隔限制):"
+                                      + ";".join(why_em)}
                 return {"params": out, "changed": False, "n": n,
                         "reason": f"距上次调整只过了 {since} 条,先不动"}
 
@@ -774,6 +882,12 @@ class ParamTuner:
                                f"仓位 {p:.1%}→{np_:.1%}")
         except Exception:  # noqa: BLE001
             pass
+
+        # 策略归因:参数调得再细,策略本身失效也白搭。
+        # 这里只回答「这条策略扣费后还赚钱吗」,乘数和上面的胜率口径不重复扣。
+        ch_attr, why_attr = self._attr_adjust(out, step)
+        changed = changed or ch_attr
+        why.extend(why_attr)
 
         # 复盘校准:连续亏损和盈亏比是硬信号,比单笔回填更可信
         rvs = self._review_stats()
@@ -849,6 +963,21 @@ def daily_report(account: str = "default", strategy: str = "",
     acc, strat = account or "default", strategy or ""
     st = _db()
 
+    # 配置里的 (账户, 策略) 和实际写库的可能是两套:AutoTrader 用的是**启动时**
+    # 的 strategy_name,learn_scheduler 用的是**当前** config。配置改过之后
+    # 日报就会一片空白,而库里其实有数据。对不上就按库里最近真在写的那条出报告,
+    # 并把「为什么换了」写进 key_note —— 不静默改口径。
+    key_note = ""
+    sr = None
+    try:
+        from . import strategy_review as sr  # noqa: F811
+        key = sr.resolve_key(acc, strat)
+        if key.get("source") == "db":
+            strat = key["strategy"]
+            key_note = str(key.get("note") or "")
+    except Exception:  # noqa: BLE001
+        sr = None
+
     def rows(sql: str, args: tuple) -> list[dict]:
         return [dict(r) for r in st.conn.execute(sql, args).fetchall()]
 
@@ -907,10 +1036,40 @@ def daily_report(account: str = "default", strategy: str = "",
     except Exception:  # noqa: BLE001
         pass
 
+    # 策略归因:跨策略比谁在赚钱,顺便给降权建议
+    attribution: dict = {}
+    if sr is not None:
+        try:
+            attribution = sr.build(account=acc, days=60)
+        except Exception:  # noqa: BLE001
+            attribution = {}
+    # 今天一条都没有时,说清楚库里到底写了什么,别让人对着 0 猜
+    activity: dict = {}
+    if not today and sr is not None:
+        try:
+            activity = sr.activity(acc, day)
+        except Exception:  # noqa: BLE001
+            activity = {}
+
+    # 观察池 + 搜索空间:自动化这一层的现状
+    promote_sum: dict = {}
+    try:
+        from . import promote as pm
+        promote_sum = pm.summary()
+    except Exception:  # noqa: BLE001
+        promote_sum = {}
+    spaces: dict = {}
+    try:
+        from . import factor_space as fsp
+        spaces = fsp.report()
+    except Exception:  # noqa: BLE001
+        spaces = {}
+
     return {
         "day": day,
         "account": acc,
         "strategy": strat,
+        "key_note": key_note,
         "today": {
             "decisions": len(today),
             "buys": len(buys),
@@ -926,6 +1085,10 @@ def daily_report(account: str = "default", strategy: str = "",
         "stats": stats,
         "predict": predict,
         "pnl": pnl,
+        "attribution": attribution,
+        "activity": activity,
+        "promote": promote_sum,
+        "spaces": spaces,
         "total": {
             "decisions": int((total[0] or {}).get("total") or 0),
             "filled": int((total[0] or {}).get("filled") or 0),
@@ -944,6 +1107,10 @@ def render_markdown(rep: dict) -> str:
         "",
         f"账户 `{rep.get('account')}` · 策略 `{rep.get('strategy') or '默认'}`",
         "",
+    ]
+    if rep.get("key_note"):
+        lines += [f"> 口径说明:{rep['key_note']}", ""]
+    lines += [
         "## 今日",
         "",
         f"- 决策 **{t.get('decisions', 0)}** 条（买 {t.get('buys', 0)} / 卖 {t.get('sells', 0)}）",
@@ -1018,6 +1185,73 @@ def render_markdown(rep: dict) -> str:
                 lines.append(f"| {f.get('name')} | "
                              f"{float(f.get('acc') or 0):.0%} | {f.get('n')} |")
             lines += ["", "> 准确率明显低于 50% 的因子,是在骗人。"]
+
+    # 当日空转时,把库里实际写了什么摆出来 —— 0 条不该是个黑箱
+    act = rep.get("activity") or {}
+    if act.get("total"):
+        lines += ["", "## 今天库里实际有什么", ""]
+        for x in act.get("by_account") or []:
+            lines.append(f"- 账户 `{x.get('account')}`:{x.get('n')} 条")
+        for x in act.get("by_strategy") or []:
+            lines.append(f"- 策略 `{x.get('strategy')}`:{x.get('n')} 条")
+        lines += ["", "> 上面的「今日」按配置的账户+策略过滤,和这张表不一定是同一批。"]
+    elif rep.get("today", {}).get("decisions") == 0:
+        lines += ["", "> 今天这条 (账户, 策略) 一条决策都没有,库里也没有别的记录。"]
+
+    at = rep.get("attribution") or {}
+    if at.get("n"):
+        lines += ["", "## 策略归因（最近 60 天,扣费后）", ""]
+        if at.get("by_strategy"):
+            lines += ["| 策略 | 样本 | 胜率 | 扣费均值 | t | 结论 |",
+                      "|---|---|---|---|---|---|"]
+            for s in at["by_strategy"]:
+                nm = float(s.get("net_mean") or 0) * 100
+                lines.append(
+                    f"| {s.get('key')} | {s.get('n')} | "
+                    f"{float(s.get('win') or 0):.0%} | {nm:+.2f}%/笔 | "
+                    f"{s.get('t') if s.get('t') is not None else '-'} | "
+                    f"{s.get('state')} |")
+        dims = at.get("dims") or {}
+        for dim, label in (("strength", "信号强度"), ("hold", "持有天数"),
+                           ("action", "方向")):
+            rows = dims.get(dim) or []
+            if not rows:
+                continue
+            parts = [f"{r['key']} {float(r.get('net_mean') or 0) * 100:+.2f}%"
+                     f"(n={r['n']})" for r in rows]
+            lines.append(f"- 按{label}:{' · '.join(parts)}")
+        fac = dims.get("factor") or []
+        if fac:
+            parts = [f"{f.get('name') or f.get('key')} {float(f.get('acc') or 0):.0%}"
+                     f"(n={f.get('n')})" for f in fac[:6]]
+            lines.append(f"- 按因子(预测层命中率):{' · '.join(parts)}")
+        for a in at.get("advice") or []:
+            lines.append(f"- **建议**:{a}")
+
+    pm = rep.get("promote") or {}
+    if pm.get("n"):
+        lines += ["", "## 观察池", ""]
+        by = pm.get("by_status") or {}
+        lines.append("- 池内候选 **%d** 个:%s" % (
+            pm.get("n", 0),
+            " · ".join(f"{k} {v}" for k, v in by.items())))
+        if pm.get("eligible"):
+            lines.append("- 可提升(需人工确认):" + "、".join(pm["eligible"]))
+        if pm.get("promoted"):
+            lines.append("- 已提升:" + "、".join(pm["promoted"]))
+    elif pm:
+        lines += ["", "## 观察池", "", "- 池子是空的（还没有因子通过审计）"]
+
+    sp = rep.get("spaces") or {}
+    if sp.get("spaces"):
+        lines += ["", "## 搜索空间", ""]
+        lines += ["| 空间 | 已测 | 通过 | 判定 | 今日预算 |", "|---|---|---|---|---|"]
+        for r in sp["spaces"]:
+            lines.append(f"| {r.get('label')} | {r.get('tested')} | "
+                         f"{r.get('promoted')} | {r.get('verdict')} | "
+                         f"{r.get('budget')} |")
+        if sp.get("verdict"):
+            lines += ["", f"> {sp['verdict']}"]
 
     lines += [
         "",
