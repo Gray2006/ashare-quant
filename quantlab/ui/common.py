@@ -159,6 +159,23 @@ class StatCard(QFrame):
             self.hint.setToolTip(str(hint))
 
 
+def _sort_number(text: str):
+    """把 "+1.23%"、"1.2亿"、"1,234" 解析成可比较的数字;解析不了返回 None。"""
+    t = str(text or "").strip().replace(",", "").replace("%", "")
+    if not t or t in ("-", "--", "—", "…", "N/A"):
+        return None
+    mult = 1.0
+    if t.endswith("亿"):
+        mult, t = 1e8, t[:-1]
+    elif t.endswith("万"):
+        mult, t = 1e4, t[:-1]
+    t = t.replace("+", "")
+    try:
+        return float(t) * mult
+    except ValueError:
+        return None
+
+
 class SmartTable(QTableWidget):
     """列宽跟着可视宽度走的表格(全部列都是 Interactive,横滚靠 Qt 自己)。
 
@@ -188,7 +205,10 @@ class SmartTable(QTableWidget):
         self.setAlternatingRowColors(True)
         self.setShowGrid(False)
         self.setWordWrap(False)
-        self.verticalHeader().setDefaultSectionSize(25)
+        self.verticalHeader().setDefaultSectionSize(28)
+        self.setVerticalScrollMode(QTableWidget.ScrollPerPixel)
+        self._sort_col = -1
+        self._sort_desc = False
         self.setHorizontalScrollMode(QTableWidget.ScrollPerPixel)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         hh = self.horizontalHeader()
@@ -196,6 +216,7 @@ class SmartTable(QTableWidget):
         hh.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         hh.setStretchLastSection(False)
         hh.setSectionResizeMode(QHeaderView.Interactive)
+        hh.setFixedHeight(32)
         self._want: list[int] = []
         self._stretch_col: int | None = None
         self._auto = False          # 没声明宽度 → 按内容量一次再自适应
@@ -217,6 +238,8 @@ class SmartTable(QTableWidget):
         self.model().dataChanged.connect(self._on_data_changed)
         # 用户拖列宽 → 把新宽度记成声明宽度,否则下次数据刷新重排会把它改回去
         hh.sectionResized.connect(self._on_section_resized)
+        hh.sectionClicked.connect(self._on_header_clicked)
+        hh.setSortIndicatorShown(False)
 
         # 空表提示:一张空表格只剩表头,看着像坏了
         self._empty_text = "暂无数据"
@@ -254,6 +277,53 @@ class SmartTable(QTableWidget):
         self._auto_sig = ()
         if not self._data_timer.isActive():
             self._data_timer.start()
+
+    def set_sortable(self, on: bool) -> None:
+        """关掉内置排序:页面自己维护行顺序时用(比如自选股)。"""
+        self._sortable = bool(on)
+
+    def _on_header_clicked(self, col: int) -> None:
+        """点表头排序:第一次降序,再点切升序。只重排显示,不改页面数据。
+
+        不用 QTableWidget.sortItems:它依赖 QTableWidgetItem.__lt__,
+        PySide 下自定义比较容易递归;这里直接按行快照重排,简单可控。
+        """
+        if not getattr(self, "_sortable", True):
+            return
+        if col < 0 or col >= self.columnCount() or self.rowCount() < 2:
+            return
+        if col == self._sort_col:
+            self._sort_desc = not self._sort_desc
+        else:
+            self._sort_col, self._sort_desc = col, True
+
+        def key(r: int):
+            it = self.item(r, col)
+            if it is None:
+                return (1, "")
+            v = it.data(Qt.UserRole)
+            if v is not None:
+                return (0, float(v))
+            return (1, it.text())
+
+        order = sorted(range(self.rowCount()), key=key,
+                       reverse=self._sort_desc)
+        ncol = self.columnCount()
+        snapshot = [[self.takeItem(r, c) for c in range(ncol)]
+                    for r in range(self.rowCount())]
+        self.blockSignals(True)
+        try:
+            for new_r, old_r in enumerate(order):
+                for c, it in enumerate(snapshot[old_r]):
+                    if it is not None:
+                        self.setItem(new_r, c, it)
+        finally:
+            self.blockSignals(False)
+        hh = self.horizontalHeader()
+        hh.setSortIndicator(col, Qt.DescendingOrder if self._sort_desc
+                            else Qt.AscendingOrder)
+        hh.setSortIndicatorShown(True)
+        self._sync_header_align()
 
     def _on_section_resized(self, col: int, _old: int, new: int) -> None:
         if self._fitting or col < 0 or col >= len(self._want):
@@ -601,6 +671,7 @@ def set_cell(t: QTableWidget, row: int, col: int, text: str,
     changed = item.text() != text
     if changed:
         item.setText(text)
+        item.setData(Qt.UserRole, _sort_number(text))
     if color:
         item.setForeground(QColor(color))
     if bold and not item.font().bold():
@@ -616,6 +687,12 @@ def set_cell(t: QTableWidget, row: int, col: int, text: str,
         except Exception:
             pass
     return item
+
+
+def row_key(t: QTableWidget, row: int, col: int = 0) -> str:
+    """取一行首列的文字(去掉 ★ 标记),排序后用它回查数据。"""
+    it = t.item(row, col)
+    return (it.text() or "").lstrip("★ ").strip() if it is not None else ""
 
 
 def pnl_color(v: float | None) -> str:
