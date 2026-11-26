@@ -428,8 +428,9 @@ class AutoPage(QWidget):
         self.btn_auto.toggled.connect(self.toggle_auto)
         self.gw_kind = QComboBox()
         self.gw_kind.addItem("模拟盘", "sim")
-        self.gw_kind.addItem("同花顺(真钱)", "ths")
-        self.gw_kind.setToolTip("同花顺走界面自动下单,先跑 tools/probe_ths.py 校准")
+        # 公开版不含券商/同花顺下单(README 明写)。真实通道只在个人版里,
+        # 公开版没有 broker/ths.py —— 挂上「同花顺(真钱)」用户一选就 ImportError。
+        self.gw_kind.setToolTip("只走模拟盘:本地撮合,不碰真钱")
         self.gw_kind.currentIndexChanged.connect(self._on_gw_kind)
         bl.addWidget(self.dry)
         bl.addWidget(QLabel("通道"))
@@ -538,13 +539,17 @@ class AutoPage(QWidget):
         self._refresh_gw_hint()
 
     def _sync_gateway(self) -> None:
-        """按通道选网关:模拟盘复用 main_window 建的那个,同花顺懒建。"""
+        """公开版只有模拟盘通道;ths 分支留作个人版回植的接口。"""
         kind = self.gw_kind.currentData()
         if kind == "ths":
-            if self._ths_gw is None:
-                from ..broker.ths import THSGateway
-                self._ths_gw = THSGateway(self.cfg)
-            self.gw = self._ths_gw
+            try:
+                if self._ths_gw is None:
+                    from ..broker.ths import THSGateway  # 公开版没有这个模块
+                    self._ths_gw = THSGateway(self.cfg)
+                self.gw = self._ths_gw
+            except Exception:  # noqa: BLE001
+                # 模块不存在就别让界面崩,退回模拟盘
+                self.gw = self._sim_gw
         else:
             self.gw = self._sim_gw
         self._reload_accounts()

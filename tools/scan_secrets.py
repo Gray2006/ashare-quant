@@ -1,16 +1,18 @@
 # -*- coding: utf-8 -*-
-"""扫两个仓库所有已跟踪文件的明文凭证。"""
+"""扫本仓库所有已跟踪文件的明文凭证。"""
+import os
 import subprocess
 import sys
 from pathlib import Path
 
-sys.path.insert(0, r"G:\DeepSeek\工作区\量化")
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 from quantlab.security import secret_scan as ss  # noqa: E402
 
-REPOS = [
-    Path(r"G:\DeepSeek\工作区\量化"),
-    Path(r"G:\DeepSeek\工作区\ashare-quant"),
-]
+# 想顺便扫别的仓库,用环境变量追加:(分号分隔的绝对路径)
+EXTRA = [p for p in (os.environ.get("SCAN_SECRETS_EXTRA") or "").split(os.pathsep) if p.strip()]
+
+REPOS = [ROOT] + [Path(p) for p in EXTRA]
 
 total = 0
 for repo in REPOS:

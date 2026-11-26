@@ -11,13 +11,17 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import stat
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-REPOS = [ROOT, Path(r"G:\DeepSeek\工作区\ashare-quant")]
+# 默认只装本仓库。想一次装多个,用 HOOK_REPOS 传(分号分隔的绝对路径)
+REPOS = [ROOT] + [Path(p) for p in
+                  (os.environ.get("HOOK_REPOS") or "").split(os.pathsep)
+                  if p.strip()]
 SRC = ROOT / "tools" / "pre-commit-secret.sh"
 
 MARK = "# 提交前扫明文凭证"

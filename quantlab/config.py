@@ -216,63 +216,24 @@ DEFAULTS: dict = {
     },
     # 云端研究接口(收费服务)。关掉时全部走本地,不影响任何现有功能。
     # key 不在这里,单独存 USER_DIR/cloud.key(DPAPI 加密)
-    # base_url 留空 = 没配地址,不连;发布包由 tools/publish_release.py 注入
-    "cloud": {"enabled": True, "base_url": "", "timeout": 30},
-    # 数据回流:默认开。只发脱敏后的决策/结果/参数,不发金额和凭据。
-    "feedback": {"enabled": True, "interval": 300, "batch": 200},
+    # base_url 留空 = 没配地址,不连。
+    # 公开版默认关闭:PRIVACY.md 承诺「默认不收集、不上传任何个人数据」,
+    # 只有用户在设置页手动开启后才可能联网(2026-11-26 复核)。
+    "cloud": {"enabled": False, "base_url": "", "timeout": 30},
+    # 数据回流:默认关。开启后才上传脱敏后的决策/结果/参数,不发金额和凭据。
+    "feedback": {"enabled": False, "interval": 1800, "batch": 200},
     # cloud_page:多一页「云端」—— 看别人回传的群体先验和云端学习成果。
     # 默认关:只有想看的这台机器打开,发给别人的包里不出现这一页。
     "ui": {"theme": "dark", "start_page": "quote", "font_size": 12,
            "cloud_page": False},
     "broker": {
-        "mode": "sim",  # sim | ths
+        # 公开版只有本地模拟撮合(README/PRIVACY 口径:不含券商、同花顺、真单)
+        "mode": "sim",
         # 费率默认值和 FEE_DEFAULTS 同源,别在这儿再抄一遍
         "sim": {"initial_cash": 1_000_000.0, **FEE_DEFAULTS},
-        "ths": {
-            "enabled": False,
-            "dry_run": True,
-            "require_confirm": True,
-            # 界面读不到券商账户,下单预算只能靠这两个人工值(元);
-            # 留空则按本地持仓成本估市值,cash 为 0 时自动交易会全部跳过
-            "cash": 0.0,
-            "market_value": 0.0,
-            # 独立下单端完整路径;窗口没开时用它可以自动拉起(留空则不自动启动)
-            "exe_path": "",
-            "process_names": ["xiadan.exe", "hevo.exe", "同花顺.exe", "hexin.exe"],
-            "window_title_keywords": ["同花顺", "网上股票交易系统", "独立下单"],
-            "main_window_class": "",
-            "keys": {
-                "buy_hotkey": "{F1}",      # 同花顺 v9.6 实测:F1 买入 / F2 卖出
-                "sell_hotkey": "{F2}",
-                "code_focus": "",
-                "after_code_enter": True,
-                "quantity_mode": "tab",  # tab | click
-                "confirm_keys": "{ENTER}",
-                "final_confirm_keys": "{ENTER}",
-            },
-            "delays": {"after_focus_ms": 400, "after_code_ms": 300, "after_price_ms": 250,
-                       "after_qty_ms": 250, "after_submit_ms": 1200},
-        },
-        # OKX 现货。密钥存本机 config.json(明文),界面只显示「已配置」;
-        # demo=True 走 OKX 模拟交易(x-simulated-trading 头),必须用模拟环境创建的 key
-        "okx": {
-            "enabled": True,
-            "api_key": "",
-            "api_secret": "",
-            "passphrase": "",
-            "demo": True,
-            "proxy": "",
-            "base_url": "",
-            "inst_type": "SPOT",
-            "ref_quote": "USDT",
-            "fee_rate": 0.001,
-        },
     },
     "risk": {
         "max_order_amount": 50_000.0,
-        # 加密单笔上限单独算(单位 USDT),默认 2000,避免手滑按 A 股额度下单
-        "max_crypto_order_amount": 2_000.0,
-        "crypto_price_deviation": 0.09,
         "max_daily_orders": 30,
         "max_price_deviation": 0.03,
         "max_position_ratio": 0.35,
@@ -480,8 +441,8 @@ class Config:
             return
         url = _safe_cloud_url(doc.get("base_url"))
         if url and not (self.data.get("cloud") or {}).get("base_url"):
+            # 只填地址,不替用户打开开关 —— 开不开是用户的决定(PRIVACY.md)
             self.set("cloud.base_url", url)
-            self.set("cloud.enabled", True)
             self.save()
         key = str(doc.get("public_key") or "").strip()
         if key and _looks_like_key(key):
