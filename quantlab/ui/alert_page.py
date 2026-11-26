@@ -161,13 +161,13 @@ class AlertPage(QWidget):
         self.poll()
 
     def del_rule(self):
-        rows = sorted({i.row() for i in self.tbl.selectedIndexes()}, reverse=True)
-        if not rows:
+        from .common import row_key
+        names = {row_key(self.tbl, i.row(), 1) for i in self.tbl.selectedIndexes()}
+        if not names:
             self.hint.setText("先在规则表里选一行")
             return
-        for r in rows:
-            if 0 <= r < len(self._rules):
-                self._rules.pop(r)
+        self._rules = [r for r in self._rules
+                       if (r.get("name") or "-") not in names]
         self._save()
         self._render()
 

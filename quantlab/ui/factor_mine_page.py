@@ -418,8 +418,9 @@ class _MarketPanel(QWidget):
             QTimer.singleShot(10000, self.run)
 
     def _picked_rows(self) -> list[dict]:
-        rows = sorted({i.row() for i in self.tbl.selectedIndexes()})
-        out = [self._rows[i] for i in rows if 0 <= i < len(self._rows)]
+        from .common import row_key
+        keys = {row_key(self.tbl, i.row()) for i in self.tbl.selectedIndexes()}
+        out = [r for r in self._rows if (r.get("expr") or "") in keys]
         if not out:
             out = [r for r in self._rows if r.get("selected")][:3]
         return out[:6]

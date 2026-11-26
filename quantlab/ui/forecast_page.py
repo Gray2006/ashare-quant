@@ -409,8 +409,11 @@ class ForecastPage(QWidget):
         self.hint.setText(title)
 
     def _on_pool_double(self, row: int, _col: int) -> None:
-        if 0 <= row < len(self._rows):
-            r = self._rows[row]
+        from .common import row_key
+        code = row_key(self.pool_tbl, row)
+        r = next((x for x in self._rows
+                  if str(x.get("code") or "") == code), None)
+        if r is not None:
             code = str(r.get("code") or "")
             if not code:
                 return

@@ -225,9 +225,12 @@ class LhbPage(QWidget):
         self._load_seats(self.tbl.currentRow())
 
     def _load_seats(self, row: int):
-        if row < 0 or row >= len(self._rows):
+        from .common import row_key
+        code_key = row_key(self.tbl, row)
+        it = next((x for x in self._rows
+                   if str(x.get("code") or "") == code_key), None)
+        if it is None:
             return
-        it = self._rows[row]
         code, day = it.get("code", ""), it.get("date") or self.day.currentData()
         name = it.get("name", "")
         self.seat_hint.setText(f"{code} {name} · 取席位中…")

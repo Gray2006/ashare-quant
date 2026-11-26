@@ -140,9 +140,12 @@ class NewsPage(QWidget):
         self.status.emit(f"资讯 {self.cat.currentText()} {len(rows)} 条")
 
     def _open(self, row: int, _col: int):
-        if row < 0 or row >= len(self._filtered):
+        from .common import row_key
+        title = row_key(self.tbl, row, 2)
+        it = next((x for x in self._filtered
+                   if (x.get("title") or "") == title), None)
+        if it is None:
             return
-        it = self._filtered[row]
         url = (it.get("url") or "").strip()
         if not url:
             self.tip.setText(f"「{it.get('source') or '本地档案'}」没有原文链接,"

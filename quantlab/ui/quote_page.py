@@ -91,6 +91,7 @@ class QuotePage(QWidget):
         self.tbl.itemSelectionChanged.connect(self._on_select)
         self.tbl.doubleClicked.connect(lambda *_: self._open_full())
         self.tbl.horizontalHeader().sectionClicked.connect(self._on_sort)
+        self.tbl.set_sortable(False)
         left.add(self.tbl, 1)
 
         self.watch_info = QLabel("")
@@ -708,11 +709,30 @@ class QuotePage(QWidget):
             self.codes.append(code)
 
     def _remove_current(self) -> None:
-        if not self.current:
+        code = self.current
+        if not code:
             return
         from ..data.store import store
-        store().remove_watch(self.current)
-        self.reload_watchlist()
+        store().remove_watch(code)
+        try:
+            wl = [c for c in (self.cfg.watchlist or [])
+                  if normalize_code(c) != code]
+            self.cfg.set("watchlist", wl, save=True)
+        except Exception:  # noqa: BLE001
+            pass
+        self.quotes.pop(code, None)
+        self.names.pop(code, None)
+        if code in self.codes:
+            i = self.codes.index(code)
+            self.codes.pop(i)
+            self.tbl.removeRow(i)
+        self.current = ""
+        self.watch_info.setText(self._watch_text())
+        if self.codes:
+            self.tbl.selectRow(min(i, len(self.codes) - 1))
+            self._on_select()
+        else:
+            self.reload_watchlist()
 
     def _set_group(self) -> None:
         i = self.tbl.currentRow()

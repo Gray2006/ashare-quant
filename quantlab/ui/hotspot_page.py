@@ -187,11 +187,12 @@ class HotspotPage(QWidget):
             item.setToolTip(f"{lead} {_f(lp, 2, True)}%" if lp is not None else lead)
 
     def _open_news(self, idx):
-        row = idx.row()
-        if 0 <= row < len(self._news):
-            url = self._news[row].get("url")
-            if url:
-                QDesktopServices.openUrl(QUrl(url))
+        from .common import row_key
+        title = row_key(self.news_tbl, idx.row(), 1)
+        for n in self._news:
+            if (n.get("title") or "") == title and n.get("url"):
+                QDesktopServices.openUrl(QUrl(n["url"]))
+                return
 
     # ------------------------------------------------------------------ 生命周期
     def stop(self):

@@ -299,10 +299,13 @@ class StrategyPage(QWidget):
 
     # ------------------------------------------------------------ 详情
     def _on_select(self) -> None:
-        i = self.tbl.currentRow()
-        if 0 <= i < len(self._rows):
-            self._selected = i
-            self._fill_detail(self._rows[i])
+        from .common import row_key
+        name = row_key(self.tbl, self.tbl.currentRow())
+        for i, it in enumerate(self._rows):
+            if it.get("name") == name:
+                self._selected = i
+                self._fill_detail(it)
+                return
 
     def _fill_detail(self, it: dict) -> None:
         raw = it["raw"]
@@ -336,8 +339,9 @@ class StrategyPage(QWidget):
                                   f"{_fmt_num(bool(raw.get('hold_until_sell', True)))}")
 
     def _on_double_click(self, row: int, _col: int) -> None:
-        if 0 <= row < len(self._rows):
-            name = self._rows[row]["name"]
+        from .common import row_key
+        name = row_key(self.tbl, row)
+        if name:
             self.status.emit(f"已选中 {name}")
 
     # ------------------------------------------------------------ Pine

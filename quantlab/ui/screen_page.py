@@ -318,13 +318,13 @@ class ScreenPage(QWidget):
                      TEXT_DIM if vol is None else TEXT)
 
     def _selected_row(self) -> dict | None:
+        from .common import row_key
         rows = self.tbl.selectionModel().selectedRows() if self.tbl.selectionModel() else []
         if not rows or self._result is None:
             return None
-        i = rows[0].row()
-        if i >= len(self._result):
-            return None
-        return self._result.iloc[i].to_dict()
+        code = row_key(self.tbl, rows[0].row())
+        hit = self._result[self._result["code"].astype(str) == code]
+        return hit.iloc[0].to_dict() if not hit.empty else None
 
     def _on_pick(self) -> None:
         pass

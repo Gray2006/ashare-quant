@@ -277,14 +277,14 @@ QCheckBox:disabled, QRadioButton:disabled {{ color: #4d5866; }}
 
 QTableWidget, QTableView {{
     background: {BG2}; border: 1px solid {BORDER}; border-radius: 10px;
-    gridline-color: {GRID}; selection-background-color: #1b2c44;
+    gridline-color: {GRID}; selection-background-color: #1d3350;
     selection-color: #ffffff; alternate-background-color: #0e151d;
 }}
-QTableWidget::item, QTableView::item {{ padding: 3px 8px; border: none; }}
+QTableWidget::item, QTableView::item {{ padding: 4px 10px; border: none; }}
 QTableWidget::item:hover, QTableView::item:hover {{ background: #17212c; }}
 QHeaderView::section {{
     background: #0f1720; color: #8fa1b5; border: none;
-    border-bottom: 1px solid {BORDER}; padding: 8px 8px;
+    border-bottom: 1px solid {BORDER}; padding: 9px 10px;
     font-size: 12px; font-weight: 600; letter-spacing: 0.4px;
 }}
 QHeaderView::section:hover {{ color: {TEXT}; background: #14202c; }}
