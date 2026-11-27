@@ -11,7 +11,7 @@ def _hits(text: str, path: str = "x.py") -> list[dict]:
 
 
 def test_okx_secret_hit():
-    t = 'api_secret = "59E41D5F7A2B3C4D5E6F7A8B9C0D1E2F"'
+    t = 'api_secret = "A1B2C3D4E5F60718293A4B5C6D7E8F90"'
     h = _hits(t)
     assert any(x["name"] == "okx_secret" for x in h)
 
@@ -21,7 +21,7 @@ def test_okx_secret_placeholder_miss():
     for t in ('api_secret = "XXXX"',
               'api_secret = "00000000000000000000000000000000"',
               'api_secret = "your_secret_here"',
-              '# api_secret = "59E41D5F7A2B3C4D5E6F7A8B9C0D1E2F"'):
+              '# api_secret = "A1B2C3D4E5F60718293A4B5C6D7E8F90"'):
         assert _hits(t) == [], f"误报: {t}"
 
 
@@ -31,7 +31,7 @@ def test_openai_sk_hit():
 
 
 def test_gray_gk_hit():
-    t = 'key = "gk_50e14913c0ffee1234567890abcdef12"'
+    t = 'key = "gk_0123456789abcdef0123456789abcdef"'
     assert any(x["name"] == "gray_gk" for x in _hits(t))
 
 
@@ -48,7 +48,7 @@ def test_private_key_hit():
 
 def test_doc_files_skipped():
     """文档里的示例不扫。"""
-    t = 'api_secret = "59E41D5F7A2B3C4D5E6F7A8B9C0D1E2F"'
+    t = 'api_secret = "A1B2C3D4E5F60718293A4B5C6D7E8F90"'
     assert _hits(t, "README.md") == []
     assert _hits(t, "docs/x.md") == []
 
@@ -64,7 +64,7 @@ password = os.environ.get("PASS")
 
 def test_mask_hides_value():
     """命中时不能把密钥原文打出来。"""
-    t = 'api_secret = "59E41D5F7A2B3C4D5E6F7A8B9C0D1E2F"'
+    t = 'api_secret = "A1B2C3D4E5F60718293A4B5C6D7E8F90"'
     h = _hits(t)[0]
-    assert "59E41D5F7A2B3C4D5E6F7A8B9C0D1E2F" not in h["snippet"]
+    assert "A1B2C3D4E5F60718293A4B5C6D7E8F90" not in h["snippet"]
     assert "*" in h["snippet"]
