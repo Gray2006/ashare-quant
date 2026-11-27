@@ -428,9 +428,8 @@ class AutoPage(QWidget):
         self.btn_auto.toggled.connect(self.toggle_auto)
         self.gw_kind = QComboBox()
         self.gw_kind.addItem("模拟盘", "sim")
-        # 公开版不含券商/同花顺下单(README 明写)。真实通道只在个人版里,
-        # 公开版没有 broker/ths.py —— 挂上「同花顺(真钱)」用户一选就 ImportError。
-        self.gw_kind.setToolTip("只走模拟盘:本地撮合,不碰真钱")
+        self.gw_kind.addItem("同花顺(真钱)", "ths")
+        self.gw_kind.setToolTip("同花顺走界面自动下单,先跑 tools/probe_ths.py 校准")
         self.gw_kind.currentIndexChanged.connect(self._on_gw_kind)
         bl.addWidget(self.dry)
         bl.addWidget(QLabel("通道"))
@@ -539,17 +538,13 @@ class AutoPage(QWidget):
         self._refresh_gw_hint()
 
     def _sync_gateway(self) -> None:
-        """公开版只有模拟盘通道;ths 分支留作个人版回植的接口。"""
+        """按通道选网关:模拟盘复用 main_window 建的那个,同花顺懒建。"""
         kind = self.gw_kind.currentData()
         if kind == "ths":
-            try:
-                if self._ths_gw is None:
-                    from ..broker.ths import THSGateway  # 公开版没有这个模块
-                    self._ths_gw = THSGateway(self.cfg)
-                self.gw = self._ths_gw
-            except Exception:  # noqa: BLE001
-                # 模块不存在就别让界面崩,退回模拟盘
-                self.gw = self._sim_gw
+            if self._ths_gw is None:
+                from ..broker.ths import THSGateway
+                self._ths_gw = THSGateway(self.cfg)
+            self.gw = self._ths_gw
         else:
             self.gw = self._sim_gw
         self._reload_accounts()
@@ -1044,9 +1039,28 @@ class AutoPage(QWidget):
             hint.setText("手动:仓位/止盈止损/回撤都用上面填的值")
 
     def _reset_guard(self) -> None:
+        """重置回撤闸。加二次确认 —— 这是会丢掉保护记录的动作。
+
+        2026-11-26 「默认账户」被重置过一次,权益历史只剩 1 个点,
+        peak 从当前权益重算,之前的回撤保护等于白积累。
+        """
+        from PySide6.QtWidgets import QMessageBox
+
+        acct = self.account.currentText() or "default"
+        ok = QMessageBox.question(
+            self, "重置回撤闸",
+            f"要把「{acct}」的回撤峰值归零吗?\n\n"
+            "重置后回撤保护从当前权益重新算起,"
+            "之前积累的峰值记录会丢失 —— 如果把峰值记在一个高位,"
+            "重置等于放弃了那部分保护。\n\n"
+            "只有确认「现在就是新的起点」时才该重置。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if ok != QMessageBox.StandardButton.Yes:
+            self.status.emit("已取消重置")
+            return
         try:
             from ..engine.adaptive import DrawdownGuard
-            acct = self.account.currentText() or "default"
             DrawdownGuard(acct).reset()
             self._refresh_guard()
             self.status.emit("回撤闸已重置(峰值归零,下次运行重新记)")
