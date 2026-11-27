@@ -40,3 +40,8 @@ desktop.ini
 feedback/
 *.db-journal
 hotmoney.db
+
+# 个人运维手册:含本机路径和凭证前缀,只属于个人仓库 量化/docs/ashare-quant-ops.md
+# 2026-11-27 已经两次被拷进公开仓库,别再放回来
+/docs/ops.md
+/docs/ops*.md
