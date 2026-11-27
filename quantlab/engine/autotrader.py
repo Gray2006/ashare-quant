@@ -280,22 +280,44 @@ class AutoTrader:
         # 规则策略是逐日状态机,不能在这里用同一套 rank 阈值硬套。
         try:
             sel = st.select(scores)
-            if sel is not None and not sel.empty:
-                last_sel = sel.iloc[-1]
-                keep = list(last_sel[last_sel == 1].index)[:self.n_hold]
-                if keep:
-                    picks = [(c, names.get(c, "")) for c in keep]
-                    return picks, (f"来自 {src} · {len(data)} 只有效"
-                                   + note_align)
         except Exception:  # noqa: BLE001
-            pass
-        # 回退:直接取分数最高的
+            sel = None          # 策略报错 → 才允许 fallback
+        if sel is not None and not sel.empty:
+            last_sel = sel.iloc[-1]
+            keep = list(last_sel[last_sel == 1].index)[:self.n_hold]
+            if keep:
+                picks = [(c, names.get(c, "")) for c in keep]
+                return picks, (f"来自 {src} · {len(data)} 只有效"
+                               + note_align)
+            # 策略跑完了但一只都不选 —— 这是「现在没有可靠信号」,不是策略坏了。
+            # 回测在这里空仓,实盘原来 fallback 硬买,结果回测躲过跌幅、实盘照亏。
+            # 2026-11-16 起 select 连续 9 个交易日返回 0 只,实盘那几天买的
+            # 全是 fallback 硬塞的。
+            if self._respect_empty():
+                return [], (f"策略无有效信号(select 空仓)· 来自 {src} · "
+                            f"{len(data)} 只有效" + note_align)
+        # 回退:直接取分数最高的。只有策略报错 / 关掉 respect_empty 时才走到这
         last = scores.dropna(how="all").iloc[-1].dropna()
         if last.empty:
             return [], "最新一天无有效因子"
         top = last.sort_values(ascending=False).head(self.n_hold)
         picks = [(c, names.get(c, "")) for c in top.index]
-        return picks, f"来自 {src} · {len(data)} 只有效" + note_align
+        return picks, (f"来自 {src} · {len(data)} 只有效(分数回退)"
+                       + note_align)
+
+
+    def _respect_empty(self) -> bool:
+        """策略 select 返回空时是否空仓。
+
+        默认 True —— 和回测口径一致。设成 False 会退回「按分数硬买」,
+        那是 2026-11-16~11-26 实盘亏损的直接原因。
+        """
+        try:
+            v = cfg().get("autotrade.respect_empty_picks", True)
+            return bool(v)
+        except Exception:  # noqa: BLE001
+            return True
+
 
     def _capital_ok(self, codes: list[str], rows: list[dict]) -> list[str]:
         """按当前权益做资金量硬过滤,返回还买得起的代码。
