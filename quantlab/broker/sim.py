@@ -6,19 +6,39 @@
 """
 from __future__ import annotations
 
+import os
+
 import datetime as dt
 import math
-import time
 
-from ..config import cfg
+from ..config import FEE_DEFAULTS, cfg, fees_of
 from ..data.store import store
 from ..engine.models import (STATUS_CANCELLED, STATUS_FILLED, STATUS_REJECTED,
                              Order, Position, SIDE_BUY)
 from ..utils import normalize_code
 from .base import Gateway
 
-DEFAULT_ACCOUNT = "默认账户"
+# 默认账户名。测试/自检可以用环境变量指到独立账户,避免动到真实模拟盘:
+#   QUANT_SIM_ACCOUNT=_pytest python -m pytest tests
+DEFAULT_ACCOUNT = os.environ.get("QUANT_SIM_ACCOUNT") or "默认账户"
 _EQUITY_KEY = "sim_equity:{acct}"
+
+# 费用口径的默认值住在 config.FEE_DEFAULTS;这里只留「能调到什么范围」和中文名。
+# 界面和 set_fees 都按这张表走,免得两边各写一份范围、改了一处另一处忘。
+FEE_LIMITS = {
+    "commission_rate": (0.0, 0.003),      # 0 ~ 万 30
+    "min_commission": (0.0, 100.0),       # 0 ~ 100 元
+    "stamp_tax_rate": (0.0, 0.003),       # 0 ~ 万 30
+    "transfer_fee_rate": (0.0, 0.001),    # 0 ~ 万 10
+    "slippage_rate": (0.0, 0.05),         # 0 ~ 5%
+}
+FEE_LABELS = {
+    "commission_rate": "佣金率",
+    "min_commission": "最低佣金",
+    "stamp_tax_rate": "印花税",
+    "transfer_fee_rate": "过户费",
+    "slippage_rate": "滑点",
+}
 
 
 class SimGateway(Gateway):
@@ -35,12 +55,8 @@ class SimGateway(Gateway):
         # 测试和回测可以传 False 绕过。
         self.strict_hours = bool(strict_hours)
         s = self.cfg.get("broker.sim", {}) or {}
-        self.commission = float(s.get("commission_rate", 0.00025))
-        self.min_commission = float(s.get("min_commission", 5.0))
-        self.stamp_tax = float(s.get("stamp_tax_rate", 0.0005))
-        self.transfer_fee = float(s.get("transfer_fee_rate", 0.00001))
-        self.slippage = float(s.get("slippage_rate", 0.001))
         self.initial_cash = float(s.get("initial_cash", 1_000_000))
+        self._load_fees()
         self.account_name = account
         self.account_initial = self.initial_cash
         self.cash = 0.0
@@ -74,12 +90,30 @@ class SimGateway(Gateway):
         self.st.set_account(f"sim_cash:{name}", float(initial_cash))
         return True, f"已创建模拟账户「{name}」,初始资金 {float(initial_cash):,.0f}"
 
-    def delete_account(self, name: str) -> tuple[bool, str]:
+    def protected_accounts(self) -> set[str]:
+        """不许被测试/自检删掉或重置的账户:配置在用的 + 默认账户。"""
+        # 真实账户名写死:测试环境里 DEFAULT_ACCOUNT 会被改成 _pytest,
+        # 但「默认账户」永远是真实模拟盘,必须保护
+        out = {"默认账户"}
+        try:
+            acc = str((self.cfg.get("autotrade") or {}).get("account") or "")
+            if acc:
+                out.add(acc)
+        except Exception:  # noqa: BLE001
+            pass
+        return out
+
+    def delete_account(self, name: str, force: bool = False) -> tuple[bool, str]:
         """删一个模拟账户(含持仓/委托/资金)。
 
         删的正好是当前账户时,先切到别的账户再删 —— 以前的写法直接拒绝,
         而界面的「删除」按钮取的就是当前账户,所以永远删不掉。
+
+        受保护账户(默认账户 / 配置在用的)必须 force=True 才删 —— 测试和自检
+        误删会把模拟盘的持仓和权益记录一起清掉。
         """
+        if not force and str(name) in self.protected_accounts():
+            return False, f"「{name}」是受保护账户,拒绝删除(要删请 force=True)"
         name = (name or "").strip()
         accounts = self.list_accounts()
         if name not in accounts:
@@ -112,7 +146,7 @@ class SimGateway(Gateway):
         for r in self.st.load_positions(self.account_name):
             p = Position(code=r["code"], name=r.get("name") or "", qty=int(r["qty"]),
                          avail_qty=int(r["avail_qty"]), cost=float(r["cost"]),
-                         opened_at=float(r.get("opened_at") or time.time()))
+                         opened_at=float(r.get("opened_at") or 0))
             # 跨日解锁 T+1:重启后 _trade_day 就是今天,_roll_t1 不会触发,
             # 隔夜持仓的 avail_qty 会一直停在 0 → 止损/换仓全被"不可卖"挡住。
             try:
@@ -173,6 +207,55 @@ class SimGateway(Gateway):
         return True, (f"模拟盘「{self.account_name}」就绪,"
                       f"可用资金 {self.cash:,.2f}")
 
+    # ------------------------------------------------------------ 费用口径
+    def _load_fees(self) -> None:
+        """从配置读费用口径。下单前会再读一次,所以改完配置的老实例也跟着变。"""
+        f = fees_of(self.cfg)
+        self.commission = f["commission_rate"]
+        self.min_commission = f["min_commission"]
+        self.stamp_tax = f["stamp_tax_rate"]
+        self.transfer_fee = f["transfer_fee_rate"]
+        self.slippage = f["slippage_rate"]
+
+    def fee_summary(self) -> str:
+        """一行费用口径,给界面和日志看。"""
+        return (f"佣金万{self.commission * 10000:g} · 最低 {self.min_commission:g} 元 · "
+                f"印花税万{self.stamp_tax * 10000:g} · 过户费万{self.transfer_fee * 10000:g} · "
+                f"滑点 {self.slippage * 100:g}%")
+
+    def set_fees(self, persist: bool = True, **rates) -> tuple[bool, str]:
+        """改费用口径:先校验范围,再写进配置,当前实例立刻生效。
+
+        只影响之后的成交;已有持仓的成本价不会回溯重算 —— 已经付掉的费,
+        回头改成本只会让历史盈亏变成假账。
+
+        persist=False 时不落盘(测试用),但内存里的配置和实例照样更新。
+        """
+        clean: dict[str, float] = {}
+        for key, val in rates.items():
+            if val is None:
+                continue
+            if key not in FEE_DEFAULTS:
+                return False, f"未知的费用项:{key}"
+            try:
+                v = float(val)
+            except (TypeError, ValueError):
+                return False, f"{FEE_LABELS[key]}不是数字:{val!r}"
+            lo, hi = FEE_LIMITS[key]
+            if not math.isfinite(v) or not (lo <= v <= hi):
+                return False, f"{FEE_LABELS[key]}超出范围({lo}~{hi}),收到 {v}"
+            clean[key] = v
+        if not clean:
+            return False, "没有要改的费用项"
+        for key, v in clean.items():
+            if hasattr(self.cfg, "set"):
+                # 先写内存配置(save=False):别的实例下次下单时会读到新值
+                self.cfg.set(f"broker.sim.{key}", v, save=False)
+        if persist and hasattr(self.cfg, "save"):
+            self.cfg.save()
+        self._load_fees()
+        return True, self.fee_summary()
+
     def fees(self, side: str, amount: float) -> float:
         fee = max(amount * self.commission, self.min_commission) + amount * self.transfer_fee
         if side == "sell":
@@ -182,6 +265,9 @@ class SimGateway(Gateway):
     def place_order(self, code: str, side: str, price: float, qty: int,
                     name: str = "") -> Order:
         self._roll_t1()
+        # 每次下单重新读一次费用口径:自动交易、脚本、界面各拿各的实例,
+        # 只改界面那一个的话其余实例会一直按旧费率算。
+        self._load_fees()
         code = normalize_code(code)
         # 落库前最后一道:风控层已经拦过,这里再断言一次。
         # 任何一行 NaN 写进 SQLite 都是永久的 —— cash -= NaN 之后
@@ -304,7 +390,11 @@ class SimGateway(Gateway):
                 "pnl": total - init, "pnl_pct": (total / init - 1) * 100 if init else 0.0,
                 "account": self.account_name, "initial": init}
 
-    def reset(self, initial_cash: float | None = None) -> None:
+    def reset(self, initial_cash: float | None = None,
+              force: bool = False) -> None:
+        if not force and self.account_name in self.protected_accounts():
+            raise RuntimeError(
+                f"「{self.account_name}」是受保护账户,拒绝重置(要重置请 force=True)")
         cash = float(initial_cash if initial_cash is not None
                      else self.account_initial or self.initial_cash)
         self.cash = cash

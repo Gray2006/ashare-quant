@@ -138,6 +138,29 @@ def check_perf() -> None:
     mark(OK if dt < 5 else WARN, "做T参数学习(单票)", f"{dt:.2f}s")
 
 
+def check_interpreter() -> None:
+    """解释器自检:依赖缺了要明确说是「跑错 Python」,而不是报一堆 ImportError。
+
+    2026-11-27 踩过:PATH 里的 python 指向 Agents Anywhere 的 connector venv
+    (3.12,没有 requests),selfcheck 直接崩在 import 上,看不出是环境问题。
+    项目实际用系统 Python 3.13。
+    """
+    import sys
+    exe = sys.executable
+    missing = []
+    for mod in ("requests", "pandas", "numpy"):
+        try:
+            __import__(mod)
+        except Exception:  # noqa: BLE001
+            missing.append(mod)
+    if missing:
+        mark(BAD, "解释器",
+             f"{exe} 缺 {'/'.join(missing)} —— 大概率跑错 Python 了,"
+             f"项目用系统 Python 3.13")
+    else:
+        mark(OK, "解释器", f"{sys.version.split()[0]} @ {exe}")
+
+
 def check_imports() -> None:
     """核心模块能不能 import(删 import 后的快速回归)。"""
     mods = ["quantlab.engine.dsl", "quantlab.engine.factor_mine",
@@ -160,6 +183,7 @@ def main() -> int:
     print("=" * 72)
     print("Gray 量化工作台 · 静态自检")
     print("=" * 72)
+    check_interpreter()
     check_imports()
     check_db()
     check_caches()

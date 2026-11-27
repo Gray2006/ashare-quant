@@ -74,3 +74,17 @@ def test_backtest_still_has_min_hold() -> None:
     """回测侧也要有,否则两边口径又分叉。"""
     bt = (ROOT / "quantlab/engine/backtest.py").read_text(encoding="utf-8")
     assert "min_hold" in bt
+
+
+def test_missing_opened_at_not_filled_with_now() -> None:
+    """持仓加载时 opened_at 缺失不能填 time.time()。
+
+    填「现在」的后果:每次重启程序,所有持仓都变成「刚买入」,
+    最短持有会永久锁死卖出。缺失字段不该改变交易行为。
+    """
+    src = (ROOT / "quantlab/broker/sim.py").read_text(encoding="utf-8")
+    assert 'r.get("opened_at") or time.time()' not in src, \
+        "opened_at 缺失时又用 time.time() 填了 —— 会让最短持有永久锁死"
+    assert 'r.get("opened_at") or 0' in src, \
+        "opened_at 缺失时应填 0(未知),让 _min_hold 放行"
+
