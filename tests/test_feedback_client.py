@@ -37,10 +37,14 @@ def _set(**kw):
 
 
 print("== 默认关闭 ==")
+# 同一个 pytest 进程里 quantlab.config 只会 import 一次:如果别的测试模块先跑过,
+# USER_DIR 已经被那个模块的 GRAY_HOME 固定,这里的 SPOOL 不一定是本模块的临时目录。
+# 所以不依赖环境变量,直接清空 spool 再开始,断言才对得上。
+feedback.SPOOL.unlink(missing_ok=True)
 ok("默认不启用", feedback.enabled() is False and cloud.enabled() is False)
 ok("关闭时 push 不落盘",
    feedback.push("backtest", "a", {"metrics": {"sharpe": 1.2}}) is False
-   and not (Path(os.environ["GRAY_HOME"]) / "feedback" / "spool.jsonl").exists())
+   and not feedback.SPOOL.exists())
 
 print("== 开启后脱敏入队 ==")
 _set(**{"cloud.enabled": True, "cloud.base_url": "https://example.com",
@@ -51,7 +55,7 @@ payload = {"metrics": {"sharpe": 1.2, "total_return_pct": 8.5},
            "account_no": "123456", "api_key": "secret",
            "cash": 1000000, "note": "ok"}
 ok("push 成功", feedback.push("backtest", "a", payload, strategy="multifactor") is True)
-spool = Path(os.environ["GRAY_HOME"]) / "feedback" / "spool.jsonl"
+spool = feedback.SPOOL
 ok("spool 已落盘", spool.exists())
 raw = spool.read_text(encoding="utf-8")
 ev = json.loads(raw.splitlines()[-1])

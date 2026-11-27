@@ -115,15 +115,15 @@ FEE_DEFAULTS = {
 
 DEFAULTS: dict = {
     "watchlist": ["600519", "000001", "300750", "601318", "002594", "600036", "688981", "000858"],
-    # 加密现货自选(OKX instId 口径,24×7 轮询)
-    "watchlist_crypto": ["BTC-USDT", "ETH-USDT", "SOL-USDT", "DOGE-USDT"],
     "refresh_seconds": {"quote": 1.0, "market": 15, "detail": 5, "moneyflow": 20,
-                        "news": 300, "crypto": 2.0},
+                        "news": 300},
     "data": {"kline_count": 260, "news_count": 20, "market_top_n": 200},
     # 本机控制接口:让 AI 代理/脚本直接操作模拟盘。
     # token 故意留空 —— 首次启动由 agent.server.ensure_token() 生成并落盘。
     # 写死在源码里的默认 token 等于没有鉴权(2026-11-22 审计 S2)。
-    "agent": {"enabled": True, "port": 8765, "token": "",
+    # 公开版默认关:没人要求开一个本地监听端口。要脚本化操作模拟盘,
+    # 在 config.json 里改成 true 再重启,README「本机控制接口」一节有说明。
+    "agent": {"enabled": False, "port": 8765, "token": "",
               "allow_live": False},
     # 私有自适应学习(不对外):分批执行 + 决策记忆 + 参数迭代。
     # 默认关,开了才改变下单节奏;不影响任何现有功能。
@@ -151,64 +151,6 @@ DEFAULTS: dict = {
     "promote": {"enabled": True, "need_good": 3, "max_fails": 6,
                 "horizon": 5, "top_n": 5, "min_excess_t": 2.0, "alpha": 0.05,
                 "days": 250, "max_stocks": 300, "enroll_min_t": 1.0},
-    # 加密量化模拟盘:独立库 crypto.db、本地零延迟撮合、7×24 学习。
-    # 行情走 Binance 公共数据镜像(本机实测唯一稳定直连的加密源,不需要 key)。
-    # 与 A 股量化完全隔离:独立账户、独立参数版本、独立预测记忆。
-    "crypto_quant": {
-        "enabled": False,
-        "account": "crypto",
-        "base_url": "https://data-api.binance.vision",
-        "proxy": "",
-        # 13 个主流 USDT 对:6 个老池子 + 7 个高流动性补位。
-        # 池子越大横截面 rank 越有意义,但每仓要相应缩小,否则现金不够铺开。
-        "pool": ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT",
-                 "ADAUSDT", "AVAXUSDT", "LINKUSDT", "TRXUSDT", "DOTUSDT",
-                 "LTCUSDT", "BCHUSDT"],
-        # 4h 而不是 1h:回测 150 天同一套策略,1h 胜率 23%、4h 胜率 52%,
-        # 1h 的噪声把信号全磨没了。撮合仍是秒级,只是信号按 4h 定。
-        "bar": "4h",
-        "interval_s": 60,
-        "initial_cash": 100000.0,
-        "fee_rate": 0.001,
-        "slippage_bps": 2.0,
-        "per_position_pct": 0.10,
-        "stop_loss": 0.05,
-        "take_profit": 0.15,
-        "atr_mult": 2.5,
-        "trailing_activate": 0.05,
-        "trailing_gap": 0.05,
-        "risk_per_trade": 0.01,
-        "threshold": 0.15,
-        "max_positions": 10,
-        "cooldown_bars": 18,
-        "cooldown_seconds": 0,
-        "mode": "trend",
-        "strict_regime": True,
-        # 杠杆:1 = 现货全款;2 = 两倍保证金。回测 4h/700 根:1x +3.9%/-7.1%,
-        # 2x +8.5%/-13.4%,3x +9.4%/-20.3% —— 收益线性放大,回撤也线性放大。
-        "leverage": 2.0,
-        "maintenance_margin": 0.005,
-        # 滚仓(秒级/分钟级反复开平)。默认关:回测 1m 强制开仓 245 笔亏 3.5%,
-        # 5m/15m 也全亏 —— 0.1% taker 费率下,一进一出 0.22% 的成本吃掉了
-        # 分钟级波动的全部利润。要开必须先把费率降到 0.02% 以下。
-        "scalp": False,
-        "scalp_take": 0.004,
-        "scalp_stop": 0.006,
-        "min_edge": 0.0,
-        # 做空:盘面弱(BTC 破 EMA60 或宽度 < 50%)时允许开空,强势里不做逆势空
-        "allow_short": True,
-        "dca_step": 0.03,
-        "dca_max": 0,
-        "dca_factor": 1.5,
-        "learn": True,
-        # 风控闸(risk.py):日亏损 5% 停新仓、峰值回撤 20% 硬熔断、连亏 4 笔减半
-        "risk": {
-            "daily_loss_limit": 0.05,
-            "max_drawdown": 0.20,
-            "consec_loss_soft": 4,
-            "consec_loss_hard": 8,
-            "max_opens_per_day": 20,
-            "cooldown_minutes": 60}},
     # 云端研究接口(收费服务)。关掉时全部走本地,不影响任何现有功能。
     # key 不在这里,单独存 USER_DIR/cloud.key(DPAPI 加密)
     # base_url 留空 = 没配地址,不连。
@@ -388,8 +330,7 @@ def fees_of(config=None) -> dict:
 
 class Config:
     # 落盘要加密的字段(点号路径)。空值不加密;读的时候透明还原。
-    SECRET_PATHS = ("agent.token", "okx.api_key", "okx.api_secret",
-                    "okx.passphrase")
+    SECRET_PATHS = ("agent.token",)
 
     def __init__(self, path: Path | None = None):
         self.path = Path(path) if path else CONFIG_PATH

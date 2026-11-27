@@ -24,10 +24,6 @@ from . import dsl
 from . import factor_analysis as fa
 
 RESULT_DIR = USER_DIR / "factor_mine"
-CRYPTO_SYMBOLS = ("BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT",
-                  "DOGEUSDT", "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT",
-                  "LTCUSDT", "BCHUSDT", "TRXUSDT", "TONUSDT", "SUIUSDT",
-                  "APTUSDT", "ARBUSDT", "OPUSDT", "NEARUSDT", "FILUSDT")
 
 LIBRARY = USER_DIR / "factor_library.json"
 
@@ -66,50 +62,6 @@ def candidates(windows: tuple[int, ...] = WINDOWS) -> list[dict]:
     return out
 
 
-def _crypto_panel(days: int = 250) -> dict:
-    """加密日线:宽表格式和 A 股一致(close/volume/... dates×codes)。"""
-    from ..crypto import feed
-
-    frames = {}
-    for sym in CRYPTO_SYMBOLS:
-        try:
-            rows = feed.klines(sym, "1d", limit=int(days))
-        except Exception:  # noqa: BLE001
-            continue
-        if not rows:
-            continue
-        df = pd.DataFrame(rows)
-        df.index = pd.to_datetime(df["t"], unit="ms").dt.normalize()
-        frames[sym] = df[["o", "h", "l", "c", "v"]].rename(
-            columns={"o": "open", "h": "high", "l": "low", "c": "close",
-                     "v": "volume"}).astype("float64")
-    if not frames:
-        return {}
-    # 有的币种会返回很早的一段(缓存/接口异常),和最新日期差太远就剔掉,
-    # 否则 union 出两段不相交日期,覆盖率直接腰斩。
-    newest = max(df.index.max() for df in frames.values())
-    frames = {k: v for k, v in frames.items()
-              if v.index.max() >= newest - pd.Timedelta(days=5)}
-    if not frames:
-        return {}
-    idx = sorted(set().union(*[set(df.index) for df in frames.values()]))
-    # 只保留覆盖率 >= 30% 的日期(去掉个别币种停牌造成的空段)
-    cov = pd.Series(0, index=pd.DatetimeIndex(idx))
-    for df in frames.values():
-        cov = cov.add(df.index.to_series().value_counts(), fill_value=0)
-    keep_idx = cov[cov >= max(3, int(len(frames) * 0.3))].index
-    idx = sorted(keep_idx)
-    if not idx:
-        return {}
-    out = {}
-    for name in ("open", "high", "low", "close", "volume"):
-        out[name] = pd.DataFrame({sym: df[name].reindex(idx)
-                                  for sym, df in frames.items()}).reindex(idx)
-    out["amount"] = out["close"] * out["volume"]
-    out["codes"] = list(frames)
-    out["last_day"] = str(idx[-1].date())
-    return out
-
 
 def _panel(days: int, max_stocks: int, market: str = "a",
            asof: str | None = None) -> dict:
@@ -119,8 +71,6 @@ def _panel(days: int, max_stocks: int, market: str = "a",
           **回测要传样本起点** —— 用今天的成交额挑历史池子是幸存者偏差,
           池子里全是后来变热的票,天然跑赢基准。
     """
-    if market == "crypto":
-        return _crypto_panel(days)
     from .alpha_pick import load_panel
     return load_panel(days=days, max_stocks=max_stocks, asof=asof)
 
@@ -630,7 +580,7 @@ def auto_due(market: str, today: str | None = None) -> bool:
     return str(doc.get("date") or "") != today
 
 
-def run_daily(markets: tuple[str, ...] = ("a", "crypto"), days: int = 250,
+def run_daily(markets: tuple[str, ...] = ("a",), days: int = 250,
               max_stocks: int = 300, horizon: int = 5) -> dict:
     """启动时调用:每个市场每天最多跑一次,结果落盘。"""
     out = {}

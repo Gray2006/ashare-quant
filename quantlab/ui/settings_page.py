@@ -212,7 +212,7 @@ class SettingsPage(QWidget):
                                 or d.get("base_url") or ""))
         self.fb_key.setText(str(self.cfg.get("cloud.key", "")
                                 or d.get("public_key") or ""))
-        on = bool(self.cfg.get("feedback.enabled", True))
+        on = bool(self.cfg.get("feedback.enabled", False))
         self.fb_on.blockSignals(True)
         self.fb_on.setChecked(on)
         self.fb_on.blockSignals(False)

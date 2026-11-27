@@ -377,8 +377,6 @@ class TradePage(QWidget):
         from ..data.store import store
         acct = getattr(self.gw, "account_name", None) if self.gw else None
         rows = store().orders(60, account=acct if self.gw and self.gw.name == "sim" else None)
-        # 加密订单在「加密」页单独展示,这里只留 A 股/同花顺的单子
-        rows = [r for r in rows if (r.get("gateway") or "sim") != "okx"]
         self._ord_ids = [int(r["id"]) for r in rows]
         self.ord_tbl.setRowCount(len(rows))
         for i, r in enumerate(rows):

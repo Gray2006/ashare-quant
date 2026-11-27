@@ -18,7 +18,7 @@ from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFileDialog,
                                QGridLayout, QHBoxLayout, QLabel, QPushButton,
-                               QTabWidget, QVBoxLayout, QWidget)
+                               QVBoxLayout, QWidget)
 
 from ..config import USER_DIR
 from ..engine import factor_mine
@@ -567,14 +567,10 @@ class FactorMinePage(QWidget):
         top.body().addLayout(bar)
         root.addWidget(top)
 
-        self.tabs = QTabWidget()
-        self.tabs.setDocumentMode(True)
-        self.panels = {"a": _MarketPanel("a", "A股", self),
-                       "crypto": _MarketPanel("crypto", "加密", self)}
-        for key, title in (("a", "A股"), ("crypto", "加密")):
-            self.panels[key].status.connect(self.status)
-            self.tabs.addTab(self.panels[key], title)
-        root.addWidget(self.tabs, 1)
+        # 公开版只做 A 股:加密面板依赖 quantlab.crypto,这个仓库没有,留着必崩
+        self.panels = {"a": _MarketPanel("a", "A股", self)}
+        self.panels["a"].status.connect(self.status)
+        root.addWidget(self.panels["a"], 1)
         self.refresh_auto()
 
     def showEvent(self, event):  # noqa: N802
@@ -583,7 +579,7 @@ class FactorMinePage(QWidget):
 
     def refresh_auto(self):
         marks = []
-        for key, name in (("a", "A股"), ("crypto", "加密")):
+        for key, name in (("a", "A股"),):
             doc = factor_mine.load_result(key)
             if not doc:
                 marks.append(f"{name}: 未跑")
@@ -596,7 +592,7 @@ class FactorMinePage(QWidget):
         self.auto_lbl.setText("自动挖掘 · " + "   |   ".join(marks))
 
     def run_all(self):
-        for key in ("a", "crypto"):
+        for key in ("a",):
             panel = self.panels[key]
             if not panel._tasks:
                 panel.run()

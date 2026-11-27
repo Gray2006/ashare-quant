@@ -233,7 +233,7 @@ class MainWindow(QMainWindow):
     def _start_agent(self) -> None:
         """本机控制接口:让 AI 代理直接操作模拟盘。只绑 127.0.0.1。"""
         self._agent = None
-        if not self.cfg.get("agent.enabled", True):
+        if not self.cfg.get("agent.enabled", False):
             return
         try:
             from ..agent.server import ensure_token, start_background
