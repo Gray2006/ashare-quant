@@ -77,3 +77,26 @@ def test_caliber_thin_when_snapshot_dominates() -> None:
     src = (ROOT / "quantlab/engine/flywheel.py").read_text(encoding="utf-8")
     assert "caliber_thin" in src
     assert "nc < ns" in src, "缺少「真实平仓少于快照」的判断"
+
+
+def test_cost_rate_from_config() -> None:
+    """归因成本必须从配置算,不能硬编码。
+
+    2026-11-27 发现 COST 硬编码 0.15%,实际配置双边约 0.269%
+    (佣金 0.0085% + 过户费 0.001% + 滑点 0.1% 各两次,卖出再加印花税 0.05%)。
+    低估成本会让归因偏乐观 —— rule:均线多头 就是被这个从 +0.07% 算成
+    看起来「唯一为正」,用真实成本是 -0.05%/笔。
+    """
+    from quantlab.engine import strategy_review as sr
+
+    rate = sr.cost_rate()
+    assert 0.001 < rate < 0.01, f"成本率 {rate} 不合理"
+    # 必须比旧的硬编码 0.15% 高 —— 否则说明没读到配置
+    assert rate > 0.0015, f"成本率 {rate} 仍低于硬编码兜底,配置没生效"
+
+
+def test_summarize_uses_cost_rate() -> None:
+    """summarize 的 net_mean 必须用 cost_rate(),不是硬编码 COST。"""
+    src = (ROOT / "quantlab/engine/strategy_review.py").read_text(
+        encoding="utf-8")
+    assert "mean - cost_rate()" in src, "net_mean 还在用硬编码 COST"

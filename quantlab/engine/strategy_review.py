@@ -20,12 +20,39 @@ import time
 
 from ..data.store import store
 
-COST = 0.0015          # 双边手续费+滑点,和其它模块同口径
+COST = 0.0015          # 兜底值。真实成本用 cost_rate() 从配置算
 MIN_N = 12             # 少于这么多笔不下结论
 MIN_DAYS = 3            # 至少几个交易日有回填才下结论
 ACT_N = 30             # 要真降权/建议暂停,至少这么多笔
 GATE_MIN_T = 2.0       # 升权要过的回测门槛:原始与中性 t 都要 ≥2
 GATE_TTL = 1800.0      # 回测门槛结果缓存半小时(跑一次要几秒,不能每轮都跑)
+
+
+def cost_rate() -> float:
+    """双边总成本(比例),从 broker.sim 配置算。
+
+    2026-11-27 发现 COST 硬编码 0.15%,而实际配置是:
+      佣金 0.0085% + 过户费 0.001% + 滑点 0.1%  (买入)
+      再加印花税 0.05%                          (卖出)
+    双边合计约 0.269%,硬编码低估了 0.12 个百分点。
+
+    低估成本会让归因偏乐观 —— 负的策略看着没那么负,
+    正的策略看着更赚。这里改成从配置算,和回测/模拟盘同口径。
+    """
+    try:
+        from ..config import cfg
+        c = cfg()
+        comm = float(c.get("broker.sim.commission_rate", 0.000085) or 0)
+        transfer = float(c.get("broker.sim.transfer_fee_rate", 0.00001) or 0)
+        stamp = float(c.get("broker.sim.stamp_tax_rate", 0.0005) or 0)
+        slip = float(c.get("broker.sim.slippage_rate", 0.001) or 0)
+        # 买入:佣金+过户费+滑点;卖出:再加印花税
+        buy = comm + transfer + slip
+        sell = comm + transfer + stamp + slip
+        total = buy + sell
+        return total if total > 0 else COST
+    except Exception:  # noqa: BLE001
+        return COST
 
 # key = f"{strategy}:{days}" → (取的时间, 门槛结果)
 _GATE_CACHE: dict[str, tuple[float, dict]] = {}
@@ -161,7 +188,7 @@ def summarize(items: list[dict]) -> dict:
         "days": len(days_set),
         "win": round(sum(1 for x in rets if x > 0) / n, 4),
         "mean": round(mean, 6),
-        "net_mean": round(mean - COST, 6),
+        "net_mean": round(mean - cost_rate(), 6),
         "t": round(t, 2) if t is not None else None,
         "total": round(sum(rets), 4),
         "avg_hold": round(sum(holds) / len(holds), 2) if holds else None,
