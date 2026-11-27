@@ -22,6 +22,7 @@ from ..data.store import store
 
 COST = 0.0015          # 双边手续费+滑点,和其它模块同口径
 MIN_N = 12             # 少于这么多笔不下结论
+MIN_DAYS = 3            # 至少几个交易日有回填才下结论
 ACT_N = 30             # 要真降权/建议暂停,至少这么多笔
 GATE_MIN_T = 2.0       # 升权要过的回测门槛:原始与中性 t 都要 ≥2
 GATE_TTL = 1800.0      # 回测门槛结果缓存半小时(跑一次要几秒,不能每轮都跑)
@@ -123,20 +124,41 @@ def _hold_days(row: dict) -> float | None:
 
 
 def summarize(items: list[dict]) -> dict:
-    """一组的样本统计。返回的 net_mean 已经扣过成本。"""
+    """一组的样本统计。返回的 net_mean 已经扣过成本。
+
+    **口径警告**:`_ret()` 优先取 close_outcome(真实平仓),没有才用
+    outcome(20 小时快照)。两种口径混算会让结论失真 ——
+    2026-11-27 实测 rule:均线多头 43 条里只有 7 条是真实平仓,
+    那 7 条均值 -0.47%/笔,而 36 条快照是 +0.13%/笔,
+    混算出来 +0.07% 看着「唯一为正」,其实真实平仓是亏的。
+
+    所以这里额外返回 n_close / n_snapshot,调用方要能看出口径构成。
+    """
     rets = [r for r in (_ret(x) for x in items) if r is not None]
     n = len(rets)
     if not n:
         return {"n": 0, "win": None, "mean": None, "net_mean": None,
                 "t": None, "total": None, "avg_hold": None, "best": None,
-                "worst": None}
+                "worst": None, "n_close": 0, "n_snapshot": 0}
+    n_close = sum(1 for x in items if x.get("close_outcome") is not None)
+    n_snapshot = n - n_close
     mean = sum(rets) / n
     var = sum((x - mean) ** 2 for x in rets) / max(1, n - 1)
     std = var ** 0.5
     t = mean / std * (n ** 0.5) if std > 1e-12 and n > 1 else None
     holds = [h for h in (_hold_days(x) for x in items) if h is not None]
+    # 样本独立性:同一天几十笔是一起涨跌的,不能当几十个独立样本
+    days_set = set()
+    for x in items:
+        ts = x.get("outcome_at") or x.get("ts")
+        if ts:
+            try:
+                days_set.add(time.strftime("%Y-%m-%d", time.localtime(float(ts))))
+            except (TypeError, ValueError, OSError):
+                pass
     return {
         "n": n,
+        "days": len(days_set),
         "win": round(sum(1 for x in rets if x > 0) / n, 4),
         "mean": round(mean, 6),
         "net_mean": round(mean - COST, 6),
@@ -145,6 +167,8 @@ def summarize(items: list[dict]) -> dict:
         "avg_hold": round(sum(holds) / len(holds), 2) if holds else None,
         "best": round(max(rets), 4),
         "worst": round(min(rets), 4),
+        "n_close": n_close,
+        "n_snapshot": n_snapshot,
     }
 
 
@@ -154,6 +178,11 @@ def verdict(s: dict) -> dict:
     if n < MIN_N:
         return {"state": "insufficient", "mult": 1.0,
                 "why": f"样本 {n} 条,不足 {MIN_N},不下结论"}
+    days = int(s.get("days") or 0)
+    if days and days < MIN_DAYS:
+        return {"state": "insufficient", "mult": 1.0,
+                "why": (f"只有 {days} 个交易日有回填(要 ≥{MIN_DAYS}),"
+                        f"同一天的几十笔不是独立样本,先不下结论")}
     net = s.get("net_mean")
     t = s.get("t")
     if net is None:

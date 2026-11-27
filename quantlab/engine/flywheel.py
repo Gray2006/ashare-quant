@@ -137,10 +137,24 @@ def build(days: int = 90) -> dict:
         lm = live.get("net_mean")
 
         if sn >= SIM_MIN_N and ln < LIVE_MIN_N:
-            if (sm or 0) > 0:
+            # 口径检查:快照(20 小时报价)占多数时,正的净均值不可信 ——
+            # 快照只反映短期报价波动,不是真实平仓收益。
+            # 2026-11-27 实测 rule:均线多头 43 条里 36 条是快照,
+            # 混算 +0.07% 看着「唯一为正」,真实平仓那 7 条是 -0.47%/笔。
+            nc = int(sim.get("n_close") or 0)
+            ns = int(sim.get("n_snapshot") or 0)
+            if (sm or 0) > 0 and nc < ns:
+                advice.append({
+                    "level": "caliber_thin", "strategy": strat,
+                    "why": (f"模拟盘 {sn} 笔净 {sm:+.2%}/笔,但真实平仓只有 "
+                            f"{nc} 条、快照 {ns} 条 —— 口径不足,"
+                            f"不能据此列候选"),
+                })
+            elif (sm or 0) > 0:
                 advice.append({
                     "level": "candidate", "strategy": strat,
-                    "why": (f"模拟盘 {sn} 笔净 {sm:+.2%}/笔,实盘样本只有 "
+                    "why": (f"模拟盘 {sn} 笔净 {sm:+.2%}/笔"
+                            f"(真实平仓 {nc} 条),实盘样本只有 "
                             f"{ln} 笔 —— 可列候选,等实盘小仓位验证"),
                 })
             else:
@@ -186,6 +200,24 @@ def build(days: int = 90) -> dict:
     }
 
 
+def save_report(days: int = 90) -> dict:
+    """跑一遍反哺分析并把结论写到 reports/，供夜间维护和界面共用。"""
+    rep = build(days)
+    text = render(rep)
+    try:
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[2]
+        d = root / "reports"
+        d.mkdir(parents=True, exist_ok=True)
+        p = d / f"flywheel-{time.strftime('%Y-%m-%d')}.md"
+        p.write_text(text, encoding="utf-8")
+        rep["path"] = str(p)
+    except Exception:  # noqa: BLE001
+        rep["path"] = ""
+    rep["text"] = text
+    return rep
+
+
 def render(rep: dict) -> str:
     """给人看的一段。"""
     lines = [f"模拟/实盘反哺 · 最近 {rep.get('days')} 天"]
@@ -204,9 +236,18 @@ def render(rep: dict) -> str:
             continue
         lines.append(f"{label}:")
         for strat, s in sorted(d.items()):
+            nc = int(s.get("n_close") or 0)
+            ns = int(s.get("n_snapshot") or 0)
+            # 口径构成必须显示 —— 快照口径(20 小时报价)和真实平仓口径
+            # 混算会让结论失真。2026-11-27 实测 rule:均线多头 43 条里
+            # 只有 7 条真实平仓(那 7 条是亏的),混算出来却是「唯一为正」。
+            cal = f"平仓{nc}/快照{ns}"
+            warn = ""
+            if nc and ns and nc < ns:
+                warn = "  <- 快照占多数,结论偏乐观"
             lines.append(
                 f"  {strat}: n={s.get('n')} 胜率 {(s.get('win') or 0):.1%} "
-                f"净 {(s.get('net_mean') or 0):+.2%}/笔")
+                f"净 {(s.get('net_mean') or 0):+.2%}/笔 [{cal}]{warn}")
         lines.append("")
 
     adv = rep.get("advice") or []
@@ -216,7 +257,8 @@ def render(rep: dict) -> str:
 
     tag = {"candidate": "候选", "confirmed": "确认",
            "diverge": "背离", "live_negative": "实盘为负",
-           "sim_negative": "模拟为负", "insufficient": "样本不足"}
+           "sim_negative": "模拟为负", "insufficient": "样本不足",
+           "caliber_thin": "口径不足"}
     lines.append("建议:")
     for a in adv:
         lines.append(f"  [{tag.get(a['level'], a['level'])}] "

@@ -191,7 +191,7 @@ class SmartTable(QTableWidget):
     所以「吃富余」的列改成自己算:其余列排完,剩下的宽度给 stretch_col。
     """
 
-    MIN_COL = 68       # 「+0.07%」「黄河旋风」这类至少要这么宽才不打省略号
+    MIN_COL = 76       # 「+0.07%」「黄河旋风」这类至少要这么宽才不打省略号
     MAX_AUTO = 260     # 没声明宽度的表,按内容量宽度时给个上限
     AUTO_ROWS = 60     # 量内容宽度只看前几十行,几千行的表不会卡
 
@@ -205,7 +205,7 @@ class SmartTable(QTableWidget):
         self.setAlternatingRowColors(True)
         self.setShowGrid(False)
         self.setWordWrap(False)
-        self.verticalHeader().setDefaultSectionSize(28)
+        self.verticalHeader().setDefaultSectionSize(30)
         self.setVerticalScrollMode(QTableWidget.ScrollPerPixel)
         self._sort_col = -1
         self._sort_desc = False
@@ -585,8 +585,9 @@ class SmartTable(QTableWidget):
                 # 全占位时沿用上一次结论,避免表头在左右之间闪。
                 self._col_left[c] = left >= right
             align = Qt.AlignLeft if self._col_left.get(c, True) else Qt.AlignRight
-            want = int(align) | int(Qt.AlignVCenter)
-            if int(item.textAlignment()) != want:
+            # Qt6 里 setTextAlignment(int) 已弃用,要传 AlignmentFlag 组合。
+            want = align | Qt.AlignVCenter
+            if item.textAlignment() != want:
                 item.setTextAlignment(want)
 
     def setHorizontalHeaderLabels(self, labels) -> None:  # noqa: N802

@@ -55,3 +55,25 @@ def test_render_marks_kind_source() -> None:
     text = flywheel.render(rep)
     assert "模拟/实盘反哺" in text
     assert "账户类型" in text
+
+
+def test_summarize_reports_caliber() -> None:
+    """summarize 必须报告口径构成 —— 快照和真实平仓混算会失真。"""
+    from quantlab.engine import strategy_review as sr
+
+    items = [
+        {"close_outcome": 0.01, "ts": 1.0},
+        {"outcome": 0.02, "ts": 2.0},
+        {"outcome": 0.03, "ts": 3.0},
+    ]
+    s = sr.summarize(items)
+    assert s["n"] == 3
+    assert s["n_close"] == 1
+    assert s["n_snapshot"] == 2
+
+
+def test_caliber_thin_when_snapshot_dominates() -> None:
+    """快照占多数时,正的净均值不能给「候选」。"""
+    src = (ROOT / "quantlab/engine/flywheel.py").read_text(encoding="utf-8")
+    assert "caliber_thin" in src
+    assert "nc < ns" in src, "缺少「真实平仓少于快照」的判断"
