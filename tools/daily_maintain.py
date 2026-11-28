@@ -454,6 +454,32 @@ def step_hypothesis(fp) -> None:
         log(f"  失败:{type(e).__name__}: {str(e)[:120]}", fp)
 
 
+def step_pick_verify(fp) -> None:
+    """选股次日验证:把 pick_runs 里的选股按次日实际走势打分。
+
+    2026-11-28 发现:pick_verify 表一直是 0 条。
+    查下来 verify_next_day 只被云端任务(gray-service)、
+    界面按钮、自检脚本调用 —— **本地每日维护从来不跑它**。
+    所以本地的涨幅预选从来没有验证数据,成绩单永远是空的。
+
+    这里补上:用配置里在用的账户跑一遍,幂等(已验证的不会重复写)。
+    """
+    log("⑥b 选股次日验证…", fp)
+    try:
+        from quantlab.config import cfg as _cfg
+        from quantlab.engine import pick_strategy as ps
+
+        acct = str((_cfg().get("autotrade") or {}).get("account")
+                   or "默认账户")
+        vr = ps.verify_next_day(account=acct)
+        if not vr.get("ok"):
+            log(f"  跳过:{vr.get('why') or '未知'}", fp)
+            return
+        log(f"  验证 {vr.get('checked')} / {vr.get('total')} 条", fp)
+    except Exception as e:  # noqa: BLE001
+        log(f"  失败:{type(e).__name__}: {str(e)[:120]}", fp)
+
+
 def step_promote(fp) -> None:
     """观察池闭环:新因子入池 → 每日检查(前推+FDR) → 回测/模拟盘两关 → 自动换上。"""
     log("⑦ 观察池闭环…", fp)
@@ -525,6 +551,8 @@ def main() -> int:
                     help="跳过观察池闭环(入池/验证/自动换策略)")
     ap.add_argument("--skip-flywheel", action="store_true",
                     help="跳过模拟/实盘反哺报告")
+    ap.add_argument("--skip-pick-verify", action="store_true",
+                    help="跳过选股次日验证(涨幅预选成绩单靠它)")
     ap.add_argument("--skip-pick", action="store_true",
                     help="跳过涨幅预选(扫描较慢)")
     ap.add_argument("--skip-backup", action="store_true",
@@ -566,6 +594,8 @@ def main() -> int:
             run("intraday", step_intraday, args.intraday_top)
         if not args.skip_promote:
             run("promote", step_promote)
+        if not args.skip_pick_verify:
+            run("pick_verify", step_pick_verify)
         if not args.skip_flywheel:
             run("flywheel", step_flywheel)
         if not args.skip_hypothesis:
