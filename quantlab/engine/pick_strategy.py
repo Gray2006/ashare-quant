@@ -52,6 +52,11 @@ PROFILES: dict[str, dict] = {
         "ic_floor": 0.004,
         "min_t": 1.0,
         "top_pct": 0.05,
+        # IC 正比例门槛:滚动窗口里 IC 为正的占比低于这个就排除。
+        # 均值高但一半时间反向的因子是噪音,不是信号。
+        # 2026-11-28 实测 lowvol20 5日 IC 均值 +0.107(权重最大),
+        # 但滚动 60 天窗口正比例只有 47%。
+        "ic_hit_floor": 0.55,
     },
     "attack": {
         "label": "进攻",
@@ -63,6 +68,7 @@ PROFILES: dict[str, dict] = {
         "ic_floor": 0.003,       # 进攻档放宽一点,不然高波动里挑不出东西
         "min_t": 0.8,
         "top_pct": 0.10,
+        "ic_hit_floor": 0.55,
     },
 }
 
@@ -116,6 +122,36 @@ def _sigma(close: pd.DataFrame, w: int = 20) -> pd.DataFrame:
     return close.pct_change().rolling(w, min_periods=10).std()
 
 
+def _ic_hit_ratio(fac_rank: pd.DataFrame, fwd_rank: pd.DataFrame,
+                  horizon: int, window: int = 60,
+                  step: int = 20) -> float:
+    """滚动窗口里 IC 与全样本同向的比例。
+
+    为什么需要:IC 均值会被少数极端窗口拉高。2026-11-28 实测
+    lowvol20 的全样本 5 日 IC = +0.107(权重最大的因子),
+    但滚动 60 天窗口只有 47% 是正的 —— 一半时间是反的。
+    均值高但经常反向的因子是噪音,不是信号。
+
+    返回 0~1;样本不足以算时返回 1.0(不拦,避免误杀新因子)。
+    """
+    idx = fac_rank.index
+    if len(idx) < window + step:
+        return 1.0
+    full = ap._rank_ic(fac_rank, fwd_rank)
+    sign = 1.0 if float(full.get("ic") or 0) >= 0 else -1.0
+    hits = []
+    for i in range(window, len(idx), step):
+        win = idx[i - window:i]
+        ic = ap._rank_ic(fac_rank.loc[win], fwd_rank.loc[win])
+        if ic.get("n", 0) < 30:
+            continue
+        v = float(ic.get("ic") or 0) * sign
+        hits.append(1.0 if v > 0 else 0.0)
+    if not hits:
+        return 1.0
+    return sum(hits) / len(hits)
+
+
 def _pref_mult(sig: pd.Series, pref: float) -> pd.Series:
     """把「波动偏好」变成乘子:想要高波动时,波动越高分越高(有界)。"""
     if not len(sig):
@@ -144,7 +180,9 @@ def scan_profile(profile: str = "steady", days: int = ap.DAYS,
 
     ics = {k: ap._rank_ic(v, ap._rank(fwd)) for k, v in fr.items()}
     # 用档位自己的门槛重算权重
+    hit_floor = float(pf.get("ic_hit_floor") or 0.0)
     w = {}
+    dropped: list[str] = []
     for k, stt in ics.items():
         if stt.get("n", 0) < 20:
             continue
@@ -152,10 +190,18 @@ def scan_profile(profile: str = "steady", days: int = ap.DAYS,
             continue
         if abs(float(stt.get("t") or 0)) < float(pf["min_t"]):
             continue
+        # IC 正比例门槛:均值高但经常反向的因子不要。
+        # 只在已经过前两道门槛的因子上算,避免无谓计算。
+        if hit_floor > 0:
+            hit = _ic_hit_ratio(fr[k], ap._rank(fwd), h)
+            if hit < hit_floor:
+                dropped.append(f"{k}(正比例{hit:.0%})")
+                continue
         w[k] = float(stt["ic"])
     total = sum(abs(x) for x in w.values())
     if total <= 0:
-        return {"ok": False, "why": "当期没有显著因子", "profile": profile}
+        return {"ok": False, "why": "当期没有显著因子", "profile": profile,
+                "dropped": dropped}
     w = {k: round(v / total, 4) for k, v in w.items()}
 
     comp = None
