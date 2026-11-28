@@ -26,7 +26,11 @@ sys.path.insert(0, str(ROOT))
 
 def log(msg: str, fp=None) -> None:
     line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}"
-    print(line, flush=True)
+    # pythonw 下 sys.stdout 是 None,print 会抛异常;日志文件才是可靠出口
+    try:
+        print(line, flush=True)
+    except Exception:  # noqa: BLE001
+        pass
     if fp is not None:
         fp.write(line + "\n")
         fp.flush()
@@ -233,13 +237,20 @@ def pick_accounts(names: list[str], used: set[str]) -> list[str]:
 
 
 def looks_reset(equity: float, market_value: float, initial: float,
-                prev_equity: float | None) -> bool:
+                prev_equity: float | None, had_trades: bool = False) -> bool:
     """账户像被重置了吗:现金回到初始、无持仓,而昨天不是这个状态。
 
     模拟账户被测试代码删了重建时,现金会回到初始值、持仓清空 —— 这种快照
     写进权益曲线会把回撤/归因带偏,宁可跳过并告警。
+
+    **had_trades 是关键**:正常清仓(全部卖出)也会让权益回到接近初始值,
+    那不是重置。2026-11-25 有持仓 100.26 万,11-26 清仓回到 100 万,
+    原来被判成「疑似重置」,结果权益曲线从 11-26 起断掉。
+    当天有成交记录就说明是正常交易,不该跳过。
     """
     if prev_equity is None:
+        return False
+    if had_trades:
         return False
     try:
         return (abs(float(equity) - float(initial)) < 1.0
@@ -289,9 +300,21 @@ def step_equity(fp) -> None:
                     prev_eq = float(prev["equity"]) if prev else None
                 except Exception:  # noqa: BLE001
                     prev_eq = None
+                # 当天有成交 → 正常清仓,不是重置
+                try:
+                    import time as _t
+                    day0 = _t.strftime("%Y-%m-%d")
+                    had = _store().conn.execute(
+                        "SELECT 1 FROM orders WHERE account=? AND "
+                        "substr(datetime(ts,'unixepoch','localtime'),1,10)=? "
+                        "AND status='filled' LIMIT 1",
+                        (name, day0)).fetchone() is not None
+                except Exception:  # noqa: BLE001
+                    had = False
                 if looks_reset(float(acc.get("total") or 0),
                                float(acc.get("market_value") or 0),
-                               float(acc.get("initial") or 0), prev_eq):
+                               float(acc.get("initial") or 0), prev_eq,
+                               had_trades=had):
                     log(f"  {name}:疑似账户被重置(现金回到初始、无持仓),"
                         f"跳过本次快照", fp)
                     continue
@@ -388,6 +411,30 @@ def step_backup(fp) -> None:
         log(f"  失败:{type(e).__name__}: {str(e)[:120]}", fp)
 
 
+def step_pick(fp, account: str = "default") -> None:
+    """涨幅预选:回填到期预测 + 扫描 + 落档。云端没部署时靠这条攒证据。"""
+    log("⑪ 涨幅预选(回填 + 扫描 + 落档)…", fp)
+    try:
+        from quantlab.engine import alpha_pick as ap
+
+        try:
+            r = ap.review(account=account)
+            log(f"  回填 {r.get('reviewed', 0)} 条(到期 {r.get('due', 0)} 条)", fp)
+        except Exception as e:  # noqa: BLE001
+            log(f"  回填失败:{str(e)[:80]}", fp)
+        rep = ap.scan()
+        if not rep.get("ok"):
+            log(f"  没结果:{str(rep.get('why'))[:80]}", fp)
+            return
+        rid = ap.save_run(rep, note="daily_maintain")
+        rec = ap.record_picks(rep, account=account)
+        log(f"  {rep.get('day')} 池 {rep.get('universe')} 只 / 可买 "
+            f"{rep.get('n_cand')} 只 / 批次 #{rid} / 预测 {len(rec.get('ids') or [])} 条",
+            fp)
+    except Exception as e:  # noqa: BLE001
+        log(f"  失败:{type(e).__name__}: {str(e)[:120]}", fp)
+
+
 def step_hypothesis(fp) -> None:
     """LLM 假设生成(默认关;config hypothesis.daily > 0 才跑)。"""
     log("⑧ LLM 假设生成…", fp)
@@ -408,25 +455,62 @@ def step_hypothesis(fp) -> None:
 
 
 def step_promote(fp) -> None:
-    """观察池每日检查(前推 + FDR)。池子空时直接跳过,几乎零成本。"""
-    log("⑦ 观察池检查…", fp)
+    """观察池闭环:新因子入池 → 每日检查(前推+FDR) → 回测/模拟盘两关 → 自动换上。"""
+    log("⑦ 观察池闭环…", fp)
     try:
         from quantlab.engine import promote as pm
 
-        pool = pm.list_pool()
-        if not pool:
-            log("  池子空,跳过", fp)
-            return
-        r = pm.tick()
-        for c in (r.get("checked") or [])[:10]:
+        r = pm.auto_run()
+        en = r.get("enroll") or {}
+        log(f"  入池 {len(en.get('enrolled') or [])} 个 / "
+            f"跳过 {len(en.get('skipped') or [])} 个", fp)
+        for c in ((r.get("tick") or {}).get("checked") or [])[:10]:
             log(f"  {c.get('name')} ok={c.get('ok')} q={c.get('q')} "
                 f"status={c.get('status')}", fp)
-        log(f"  完成:{r.get('n')} 个候选", fp)
+        for v in (r.get("verified") or []):
+            log(f"  ✓ 两关通过 {v.get('name')}", fp)
+        for v in (r.get("rejected") or []):
+            log(f"  ✗ {v.get('name')} {v.get('why') or ''}", fp)
+        ap = r.get("applied")
+        if ap and ap.get("ok"):
+            log(f"  已换上策略 {ap.get('strategy')}", fp)
+        else:
+            log(f"  未换策略({r.get('apply_skipped') or '没有通过两关的候选'})", fp)
+    except Exception as e:  # noqa: BLE001
+        log(f"  失败:{type(e).__name__}: {str(e)[:120]}", fp)
+
+
+def step_flywheel(fp) -> None:
+    """模拟盘/实盘互相反哺:同一策略两边表现对比,背离就报警。"""
+    log("⑧ 模拟/实盘反哺…", fp)
+    try:
+        from quantlab.engine import flywheel as fw
+
+        rep = fw.save_report(days=90)
+        kinds = rep.get("kinds") or {}
+        log("  账户类型:" + ("、".join(f"{k}={v}" for k, v in kinds.items())
+                            or "未配置,全部按模拟盘算"), fp)
+        adv = rep.get("advice") or []
+        if not adv:
+            log("  样本不足,暂无建议", fp)
+        for a in adv[:8]:
+            log(f"  [{a.get('level')}] {a.get('strategy')}: {a.get('why')}", fp)
+        if rep.get("path"):
+            log(f"  写 {rep['path']}", fp)
     except Exception as e:  # noqa: BLE001
         log(f"  失败:{type(e).__name__}: {str(e)[:120]}", fp)
 
 
 def main() -> int:
+    # 计划任务用 pythonw.exe 跑(没有控制台),stdout/stderr 是 None
+    if sys.stdout is None or sys.stderr is None:
+        import os as _os
+        _devnull = open(_os.devnull, "w", encoding="utf-8")
+        if sys.stdout is None:
+            sys.stdout = _devnull
+        if sys.stderr is None:
+            sys.stderr = _devnull
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--skip-snapshot", action="store_true")
     ap.add_argument("--skip-lhb", action="store_true")
@@ -438,7 +522,11 @@ def main() -> int:
                     help="顺手补小时线(默认不跑,日内结构空间已证否)")
     ap.add_argument("--intraday-top", type=int, default=300)
     ap.add_argument("--skip-promote", action="store_true",
-                    help="跳过观察池每日检查")
+                    help="跳过观察池闭环(入池/验证/自动换策略)")
+    ap.add_argument("--skip-flywheel", action="store_true",
+                    help="跳过模拟/实盘反哺报告")
+    ap.add_argument("--skip-pick", action="store_true",
+                    help="跳过涨幅预选(扫描较慢)")
     ap.add_argument("--skip-backup", action="store_true",
                     help="跳过模拟账户备份")
     ap.add_argument("--skip-hypothesis", action="store_true",
@@ -478,12 +566,16 @@ def main() -> int:
             run("intraday", step_intraday, args.intraday_top)
         if not args.skip_promote:
             run("promote", step_promote)
+        if not args.skip_flywheel:
+            run("flywheel", step_flywheel)
         if not args.skip_hypothesis:
             run("hypothesis", step_hypothesis)
         if not args.skip_equity:
             run("equity", step_equity)
         if not args.skip_backup:
             run("backup", step_backup)
+        if not args.skip_pick:
+            run("pick", step_pick)
         if failed:
             log(f"完成(失败 {len(failed)} 步:{'、'.join(failed)})", fp)
             return 1

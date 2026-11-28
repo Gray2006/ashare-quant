@@ -381,9 +381,14 @@ class DecisionLog:
         if not quotes:
             return 0
         st = _db()
-        sql = ("SELECT * FROM sl_decisions WHERE account=? AND strategy=? "
+        # 不按 strategy 过滤 —— 收盘快照的语义是「决策价 vs 当天收盘价」,
+        # 和历史策略无关。原来加了 strategy=? 条件,策略一换
+        # (multifactor → wfmulti)旧策略的决策就永远不回填,
+        # 2026-11-28 实测只有 144/467(31%)有 close_outcome。
+        # 账户仍然要限,不同账户的决策不能混。
+        sql = ("SELECT * FROM sl_decisions WHERE account=? "
                "AND close_outcome IS NULL AND dropped=0")
-        args: list = [self.account, self.strategy]
+        args: list = [self.account]
         if day_start is not None:
             sql += " AND ts>=?"
             args.append(float(day_start))
@@ -780,8 +785,10 @@ class ParamTuner:
             # 导致 auto_suspend 从 False 改成 True 后运行中的进程读不到。
             try:
                 import json as _json
-                from pathlib import Path as _P
-                _cfg_path = _P(__file__).resolve().parents[2] / "config.json"
+                # 用和 Config 同一套目录解析:GRAY_HOME 生效时(服务端/测试)
+                # 配置不在仓库根,硬编码路径会读到另一份
+                from ..config import _user_dir
+                _cfg_path = _user_dir() / "config.json"
                 sc = (_json.loads(_cfg_path.read_text(encoding="utf-8"))
                       .get("selflearn") or {})
             except Exception:  # noqa: BLE001
@@ -1021,9 +1028,11 @@ def daily_report(account: str = "default", strategy: str = "",
     versions_today = rows(
         "SELECT params,reason,score,n FROM sl_versions WHERE account=? AND strategy=? "
         "AND ts>=? AND ts<? ORDER BY ts", (acc, strat, start, end))
+    # 只报「还没跑完」的分批:2/2 已完成的、以及很旧的残留都不该算「进行中」
     pending_tranches = rows(
-        "SELECT code,side,target_qty,done_qty,tranches,done_tranches "
-        "FROM sl_tranche WHERE account=?", (acc,))
+        "SELECT code,side,target_qty,done_qty,tranches,done_tranches,updated "
+        "FROM sl_tranche WHERE account=? AND done_tranches < tranches "
+        "AND updated >= ? ORDER BY updated DESC", (acc, start))
     total = rows(
         "SELECT COUNT(*) AS total, "
         "SUM(CASE WHEN outcome IS NOT NULL THEN 1 ELSE 0 END) AS filled "
@@ -1031,6 +1040,11 @@ def daily_report(account: str = "default", strategy: str = "",
     all_versions = rows(
         "SELECT COUNT(*) AS n FROM sl_versions WHERE account=? AND strategy=?",
         (acc, strat))
+    # 版本历史:学习到底改过什么、为什么改。页面要能看见迭代轨迹,
+    # 不能只给一个「改过几次」的数字。
+    recent_versions = rows(
+        "SELECT ts,params,reason,score,n FROM sl_versions "
+        "WHERE account=? AND strategy=? ORDER BY ts DESC LIMIT 20", (acc, strat))
 
     buys = [d for d in today if d["action"] == "buy"]
     sells = [d for d in today if d["action"] == "sell"]
@@ -1106,6 +1120,7 @@ def daily_report(account: str = "default", strategy: str = "",
         },
         "tranches": pending_tranches,
         "versions_today": versions_today,
+        "versions": recent_versions,
         "stats": stats,
         "predict": predict,
         "pnl": pnl,
@@ -1121,6 +1136,56 @@ def daily_report(account: str = "default", strategy: str = "",
     }
 
 
+_STRATEGY_CN = {
+    "multifactor": "多因子",
+    "wfmulti": "走查多因子",
+    "momentum20": "20日动量",
+    "reversal5": "5日反转",
+    "lowvol20": "20日低波",
+    "default": "默认",
+}
+
+_STATE_CN = {
+    "insufficient": "样本不足",
+    "suspend": "暂停",
+    "downweight": "降权",
+    "up": "上调",
+    "neutral": "中性",
+    "unknown": "未知",
+    "dead": "失效",
+}
+
+
+def _cn_strategy(name) -> str:
+    """策略内部名 → 中文显示名。rule:xxx 是自定义规则。"""
+    n = str(name or "")
+    if n.startswith("rule:"):
+        return "自定义:" + n[5:]
+    return _STRATEGY_CN.get(n, n)
+
+
+def _cn_state(state) -> str:
+    return _STATE_CN.get(str(state or ""), str(state or ""))
+
+
+_ACTION_CN = {"buy": "买入", "sell": "卖出"}
+
+
+def _cn_action(action) -> str:
+    return _ACTION_CN.get(str(action or ""), str(action or ""))
+
+
+def _cn_text(text) -> str:
+    """原因/说明文本里的英文键换成中文。"""
+    out = str(text or "")
+    for k, cn in (("close_outcome", "收盘打分"), ("outcome", "回填结果"),
+                  ("buy", "买入"), ("sell", "卖出")):
+        out = out.replace(k, cn)
+    for k, cn in _STRATEGY_CN.items():
+        out = out.replace(k, cn)
+    return out
+
+
 def render_markdown(rep: dict) -> str:
     """把日报渲染成人能读的 markdown。"""
     t = rep.get("today") or {}
@@ -1129,7 +1194,7 @@ def render_markdown(rep: dict) -> str:
     lines = [
         f"# {rep.get('day')} 自主学习日报",
         "",
-        f"账户 `{rep.get('account')}` · 策略 `{rep.get('strategy') or '默认'}`",
+        f"账户 `{rep.get('account')}` · 策略 `{_cn_strategy(rep.get('strategy')) or '默认'}`",
         "",
     ]
     if rep.get("key_note"):
@@ -1187,7 +1252,7 @@ def render_markdown(rep: dict) -> str:
     lines += ["", "## 参数", ""]
     if vt:
         for v in vt:
-            lines.append(f"- **今日调整**:{v.get('reason')}")
+            lines.append(f"- **今日调整**:{_cn_text(v.get('reason'))}")
             lines.append(f"  - 依据 {v.get('n')} 条样本,评分 {float(v.get('score') or 0):+.2%}")
     else:
         lines.append("- 今日未调整（样本不足或未到滞回阈值）")
@@ -1206,7 +1271,8 @@ def render_markdown(rep: dict) -> str:
         if fs:
             lines += ["", "| 因子 | 准确率 | 样本 |", "|---|---|---|"]
             for f in fs:
-                lines.append(f"| {f.get('name')} | "
+                fname = str(f.get("name") or "").replace("Beta", "贝塔")
+                lines.append(f"| {fname} | "
                              f"{float(f.get('acc') or 0):.0%} | {f.get('n')} |")
             lines += ["", "> 准确率明显低于 50% 的因子,是在骗人。"]
 
@@ -1217,7 +1283,7 @@ def render_markdown(rep: dict) -> str:
         for x in act.get("by_account") or []:
             lines.append(f"- 账户 `{x.get('account')}`:{x.get('n')} 条")
         for x in act.get("by_strategy") or []:
-            lines.append(f"- 策略 `{x.get('strategy')}`:{x.get('n')} 条")
+            lines.append(f"- 策略 `{_cn_strategy(x.get('strategy'))}`:{x.get('n')} 条")
         lines += ["", "> 上面的「今日」按配置的账户+策略过滤,和这张表不一定是同一批。"]
     elif rep.get("today", {}).get("decisions") == 0:
         lines += ["", "> 今天这条 (账户, 策略) 一条决策都没有,库里也没有别的记录。"]
@@ -1231,26 +1297,27 @@ def render_markdown(rep: dict) -> str:
             for s in at["by_strategy"]:
                 nm = float(s.get("net_mean") or 0) * 100
                 lines.append(
-                    f"| {s.get('key')} | {s.get('n')} | "
+                    f"| {_cn_strategy(s.get('key'))} | {s.get('n')} | "
                     f"{float(s.get('win') or 0):.0%} | {nm:+.2f}%/笔 | "
                     f"{s.get('t') if s.get('t') is not None else '-'} | "
-                    f"{s.get('state')} |")
+                    f"{_cn_state(s.get('state'))} |")
         dims = at.get("dims") or {}
         for dim, label in (("strength", "信号强度"), ("hold", "持有天数"),
                            ("action", "方向")):
             rows = dims.get(dim) or []
             if not rows:
                 continue
-            parts = [f"{r['key']} {float(r.get('net_mean') or 0) * 100:+.2f}%"
+            parts = [f"{_cn_action(r['key'])} {float(r.get('net_mean') or 0) * 100:+.2f}%"
                      f"(n={r['n']})" for r in rows]
             lines.append(f"- 按{label}:{' · '.join(parts)}")
         fac = dims.get("factor") or []
         if fac:
-            parts = [f"{f.get('name') or f.get('key')} {float(f.get('acc') or 0):.0%}"
+            parts = [f"{str(f.get('name') or f.get('key')).replace('Beta', '贝塔')} "
+                     f"{float(f.get('acc') or 0):.0%}"
                      f"(n={f.get('n')})" for f in fac[:6]]
             lines.append(f"- 按因子(预测层命中率):{' · '.join(parts)}")
         for a in at.get("advice") or []:
-            lines.append(f"- **建议**:{a}")
+            lines.append(f"- **建议**:{_cn_text(a)}")
 
     pm = rep.get("promote") or {}
     if pm.get("n"):
@@ -1258,7 +1325,7 @@ def render_markdown(rep: dict) -> str:
         by = pm.get("by_status") or {}
         lines.append("- 池内候选 **%d** 个:%s" % (
             pm.get("n", 0),
-            " · ".join(f"{k} {v}" for k, v in by.items())))
+            " · ".join(f"{_cn_state(k)} {v}" for k, v in by.items())))
         if pm.get("eligible"):
             lines.append("- 可提升(需人工确认):" + "、".join(pm["eligible"]))
         if pm.get("promoted"):
@@ -1272,7 +1339,7 @@ def render_markdown(rep: dict) -> str:
         lines += ["| 空间 | 已测 | 通过 | 判定 | 今日预算 |", "|---|---|---|---|---|"]
         for r in sp["spaces"]:
             lines.append(f"| {r.get('label')} | {r.get('tested')} | "
-                         f"{r.get('promoted')} | {r.get('verdict')} | "
+                         f"{r.get('promoted')} | {_cn_state(r.get('verdict'))} | "
                          f"{r.get('budget')} |")
         if sp.get("verdict"):
             lines += ["", f"> {sp['verdict']}"]
